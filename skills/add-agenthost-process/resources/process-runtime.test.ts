@@ -267,7 +267,9 @@ describe("process-runtime", () => {
     expect(scrubAgentLogLine("Authorization: Bearer abc.def-ghi")).toContain(
       "Bearer ***",
     );
-    expect(scrubAgentLogLine("HTTPS_PROXY=http://x")).toContain("HTTPS_PROXY=***");
+    expect(scrubAgentLogLine("HTTPS_PROXY=http://x")).toContain(
+      "HTTPS_PROXY=***",
+    );
     expect(scrubAgentLogLine("ONECLI_API_KEY=supersecret")).toContain(
       "ONECLI_API_KEY=***",
     );
@@ -688,8 +690,7 @@ describe("process-runtime", () => {
     const onExit = vi.fn();
     killTracked("sess-1", "idle", onExit, 5);
     await new Promise((r) => setTimeout(r, 20));
-    const termPid =
-      process.platform === "win32" ? process.pid : -process.pid;
+    const termPid = process.platform === "win32" ? process.pid : -process.pid;
     expect(killSpy).toHaveBeenCalledWith(termPid, "SIGTERM");
     expect(killSpy).toHaveBeenCalledWith(termPid, "SIGKILL");
     expect(isProcessRunning("sess-1")).toBe(false);
@@ -815,10 +816,13 @@ describe("process-runtime", () => {
       if (pid === -777_888) {
         throw Object.assign(new Error("EPERM"), { code: "EPERM" });
       }
-      if (pid === 777_888 && (signal === 0 || signal === undefined)) return true;
+      if (pid === 777_888 && (signal === 0 || signal === undefined))
+        return true;
       return true;
     }) as typeof process.kill);
-    expect(() => killTracked("sess-pg", "pg-fallback", undefined, 1)).not.toThrow();
+    expect(() =>
+      killTracked("sess-pg", "pg-fallback", undefined, 1),
+    ).not.toThrow();
     expect(killSpy).toHaveBeenCalledWith(-777_888, "SIGTERM");
     expect(killSpy).toHaveBeenCalledWith(777_888, "SIGTERM");
     killSpy.mockRestore();
@@ -845,7 +849,8 @@ describe("process-runtime", () => {
       expect(killSpy).not.toHaveBeenCalledWith(-666_555, "SIGTERM");
     } finally {
       killSpy.mockRestore();
-      if (platformDesc) Object.defineProperty(process, "platform", platformDesc);
+      if (platformDesc)
+        Object.defineProperty(process, "platform", platformDesc);
     }
   });
 

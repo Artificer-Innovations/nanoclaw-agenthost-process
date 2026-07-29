@@ -27,7 +27,7 @@ Prefer Docker (or another sandboxed runtime) for untrusted channel content. Use 
 
 Enabling process mode requires **two** deliberate steps so a typo on `--runtime` alone cannot unsandbox an agent:
 
-1. Host opt-in: `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` in the NanoClaw `.env` (preferred) or LaunchAgent / shell env. Process boot copies this key from `.env` into `process.env` when unset — same pattern as `SESSIONIO_*`.
+1. Host opt-in: `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` in the NanoClaw `.env` (preferred) or LaunchAgent / shell env. Process boot copies this key from `.env` into `process.env` when unset — same pattern as `SESSIONIO_*`. Keep `.env` mode `0600` / owner-only and gitignored (NanoClaw’s default). Explicit `process.env` still wins over `.env`.
 2. Per-group: `ncl groups config update --id <id> --runtime process`
 
 Wakes fail closed until the allow env is set. After repeated fail-closed wakes the driver writes `.process.wake-blocked` under the session dir and logs an error so misconfiguration is visible.

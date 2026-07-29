@@ -78,4 +78,19 @@ describe("process-boot", () => {
     expect(log.info).toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });
+
+  it("still registers when readEnvFile throws", async () => {
+    readEnvFile.mockImplementation(() => {
+      throw new Error("boom");
+    });
+    const { log } = await import("./log.js");
+    vi.mocked(log.warn).mockClear();
+    const { startAgenthostProcess } = await import("./process-boot.js");
+    startAgenthostProcess();
+    expect(register).toHaveBeenCalledWith("process", expect.any(Object));
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to apply NANOCLAW_ALLOW_PROCESS_RUNTIME"),
+      expect.objectContaining({ err: expect.any(Error) }),
+    );
+  });
 });

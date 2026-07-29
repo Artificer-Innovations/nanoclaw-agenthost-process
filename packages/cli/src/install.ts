@@ -15,6 +15,8 @@ import {
 } from "./patch.js";
 import {
   REQUIRED_HOST_FILES,
+  ensureConsumerRuntimeDependencies,
+  findMissingConsumerRuntimeDependencies,
   findNanoclawRoot,
   readPackageVersion,
 } from "./paths.js";
@@ -32,6 +34,7 @@ export interface InstallResult {
   unchanged: string[];
   version: string;
   skillPath: string;
+  runtimeDepsAdded: string[];
 }
 
 export function runInstall(root?: string): InstallResult {
@@ -86,13 +89,19 @@ export function runInstall(root?: string): InstallResult {
 
   commitWrites(pending);
   const skillPath = syncSkillToFork(nanoclawRoot);
+  const deps = ensureConsumerRuntimeDependencies(nanoclawRoot);
+  const changed = pending.map((write) =>
+    path.relative(nanoclawRoot, write.path),
+  );
+  if (deps.changed) changed.push("package.json");
 
   return {
     root: nanoclawRoot,
-    changed: pending.map((write) => path.relative(nanoclawRoot, write.path)),
+    changed,
     unchanged,
     version: readPackageVersion(),
     skillPath,
+    runtimeDepsAdded: deps.added,
   };
 }
 
@@ -127,6 +136,8 @@ export function runVerify(root?: string): {
       issues.push(`${file.path} missing agenthost-process markers`);
     }
   }
+
+  issues.push(...findMissingConsumerRuntimeDependencies(nanoclawRoot));
 
   return { root: nanoclawRoot, ok: issues.length === 0, issues };
 }
@@ -190,17 +201,35 @@ export function printInstallNextSteps(
   console.log(
     `Changed ${result.changed.length} files; ${result.unchanged.length} already current.`,
   );
+  if (result.runtimeDepsAdded.length) {
+    console.log(
+      `Added package.json dependencies: ${result.runtimeDepsAdded.join(", ")}`,
+    );
+  }
   console.log(`Synced skill → ${result.skillPath}`);
   console.log("\nNext steps:");
-  console.log("  1. pnpm run build");
-  console.log(
-    "  2. ./container/build.sh   # WORKING_ROOT patches live in the agent-runner image",
-  );
-  console.log("  3. pnpm exec nanoclaw-agenthost-process verify");
-  console.log(
-    "  4. Opt a group in: ncl groups config update --id <id> --runtime process",
-  );
-  console.log("  5. Restart the NanoClaw host service");
+  if (result.runtimeDepsAdded.length) {
+    console.log("  1. pnpm install   # resolve newly added runtime deps");
+    console.log("  2. pnpm run build");
+    console.log(
+      "  3. ./container/build.sh   # WORKING_ROOT patches live in the agent-runner image",
+    );
+    console.log("  4. pnpm exec nanoclaw-agenthost-process verify");
+    console.log(
+      "  5. Opt a group in: ncl groups config update --id <id> --runtime process",
+    );
+    console.log("  6. Restart the NanoClaw host service");
+  } else {
+    console.log("  1. pnpm run build");
+    console.log(
+      "  2. ./container/build.sh   # WORKING_ROOT patches live in the agent-runner image",
+    );
+    console.log("  3. pnpm exec nanoclaw-agenthost-process verify");
+    console.log(
+      "  4. Opt a group in: ncl groups config update --id <id> --runtime process",
+    );
+    console.log("  5. Restart the NanoClaw host service");
+  }
   console.log(
     "\nSecurity: process mode runs agents as the host user — prefer Docker for untrusted content.",
   );

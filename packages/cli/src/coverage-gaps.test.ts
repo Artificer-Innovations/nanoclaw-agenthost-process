@@ -23,6 +23,9 @@ import {
 } from "./patch.js";
 import {
   HOST_OPTIONAL_COPY_RULES,
+  consumerRuntimeDependencies,
+  ensureConsumerRuntimeDependencies,
+  findMissingConsumerRuntimeDependencies,
   packageRoot,
   readPackageVersion,
   resourcesDir,
@@ -413,6 +416,56 @@ describe("resourcesDir", () => {
       expect(() => packageRoot(dir)).toThrow(
         /Could not locate nanoclaw-agenthost-process package root/,
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("consumerRuntimeDependencies falls back when host package.json is absent", () => {
+    const fake = mkdtempSync(path.join(tmpdir(), "ahp-pub-"));
+    try {
+      writeFileSync(
+        path.join(fake, "package.json"),
+        JSON.stringify({ name: "nanoclaw-agenthost-process" }),
+      );
+      // No packages/host/package.json → published-layout pin.
+      expect(consumerRuntimeDependencies(fake)).toEqual({
+        "smol-toml": "^1.7.1",
+      });
+    } finally {
+      rmSync(fake, { recursive: true, force: true });
+    }
+  });
+
+  it("consumerRuntimeDependencies omits smol-toml when host package has no pin", () => {
+    const fake = mkdtempSync(path.join(tmpdir(), "ahp-nopin-"));
+    try {
+      writeFileSync(
+        path.join(fake, "package.json"),
+        JSON.stringify({ name: "nanoclaw-agenthost-process" }),
+      );
+      mkdirSync(path.join(fake, "packages/host"), { recursive: true });
+      writeFileSync(
+        path.join(fake, "packages/host/package.json"),
+        JSON.stringify({ name: "@nanoclaw-agenthost-process/host" }),
+      );
+      expect(consumerRuntimeDependencies(fake)).toEqual({});
+    } finally {
+      rmSync(fake, { recursive: true, force: true });
+    }
+  });
+
+  it("ensureConsumerRuntimeDependencies throws without package.json", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-nodeps-"));
+    try {
+      expect(() => ensureConsumerRuntimeDependencies(dir)).toThrow(
+        /Missing package.json/,
+      );
+      expect(
+        findMissingConsumerRuntimeDependencies(dir).some((i) =>
+          i.includes("smol-toml"),
+        ),
+      ).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

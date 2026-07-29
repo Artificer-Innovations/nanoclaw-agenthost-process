@@ -29,7 +29,9 @@ See also: [QUICKSTART.md](../../QUICKSTART.md) in the npm package.
 
 **Security:** process mode runs agent code as the **host user** for configured paths. Mount allowlists only help if the driver enforces path checks. Limit which groups use `runtime=process`. Designed for a **single-operator macOS** host — not multi-tenant / shared-host.
 
-Wakes also require `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` on the host (NanoClaw `.env` preferred — process boot applies it when unset, same pattern as `SESSIONIO_*`) so a casual `--runtime process` flip cannot remove the sandbox alone.
+Wakes also require `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` on the host (NanoClaw `.env` preferred — process boot applies it when unset, same pattern as `SESSIONIO_*`; keep `.env` `0600` / gitignored) so a casual `--runtime process` flip cannot remove the sandbox alone.
+
+Install also adds a `smol-toml` dependency to the fork’s `package.json` (copied `process-runtime.ts` imports it for Codex `config.toml` normalization). Run `pnpm install` after install/upgrade when that dep is new.
 
 ## Architecture
 
@@ -106,7 +108,7 @@ Restart the NanoClaw host.
 NANOCLAW_ALLOW_PROCESS_RUNTIME=1
 ```
 
-(LaunchAgent / shell `export` also works; `.env` alone is enough because process boot copies the key into `process.env` when unset.)
+Keep `.env` mode `0600` / owner-only and gitignored. LaunchAgent / shell `export` also works; `.env` alone is enough because process boot copies the key into `process.env` when unset (explicit `process.env` wins).
 
 2. Opt a group into process runtime (agenthosts config):
 

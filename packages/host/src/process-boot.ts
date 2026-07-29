@@ -20,7 +20,16 @@ function applyProcessHostEnv(): void {
  * `--runtime process` flag alone cannot remove the sandbox.
  */
 export function startAgenthostProcess(): void {
-  applyProcessHostEnv();
+  try {
+    applyProcessHostEnv();
+  } catch (err) {
+    // Malformed/unreadable .env must not skip driver registration — wakes still
+    // fail closed without the allow flag; an explicit process.env value still wins.
+    log.warn(
+      "Failed to apply NANOCLAW_ALLOW_PROCESS_RUNTIME from .env — continuing with process.env only",
+      { err },
+    );
+  }
   registerRuntimeDriver("process", processDriver);
   if (!isProcessRuntimeAllowed()) {
     log.warn(

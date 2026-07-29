@@ -75,16 +75,16 @@ import {
   augmentHostToolPath,
   buildProcessAgentEnv,
   cleanupProcessOrphans,
+  codexHomeLockSizeForTests,
   ensureAgentSymlink,
   ensureCodexApiKeyAuthStub,
   ensureCodexFileCredentialsStore,
   ensureProcessProviderHomes,
-  ensureSecretAuthStorageDisabled,
-  insertTomlTopLevelLines,
   isPidAlive,
   isProcessRunning,
   isProcessRuntimeAllowed,
   killTracked,
+  mutateCodexFileCredentialsDoc,
   pickAllowedHostEnv,
   pidFilePath,
   processDriver,
@@ -95,6 +95,7 @@ import {
   scrubAgentLogLine,
   wakeBlockedPath,
   wakeProcess,
+  withCodexHomeLock,
   writePidFile,
   KILL_GRACE_MS,
   WAKE_FAIL_BLOCK_AFTER,
@@ -117,36 +118,21 @@ function makeChild(pid: number | undefined): EventEmitter & {
 }
 
 describe("process-runtime", () => {
-  it("insertTomlTopLevelLines covers empty, table-at-start, and no-table paths", () => {
-    expect(insertTomlTopLevelLines("x = 1\n", [])).toBe("x = 1\n");
-    expect(insertTomlTopLevelLines("", ["a = 1"])).toBe("a = 1\n");
-    expect(insertTomlTopLevelLines("[features]\nok = true\n", ["a = 1"])).toBe(
-      "a = 1\n[features]\nok = true\n",
-    );
-    expect(
-      insertTomlTopLevelLines("x = 1\n[features]\nok = true\n", ["a = 1"]),
-    ).toBe("x = 1\na = 1\n[features]\nok = true\n");
-    expect(insertTomlTopLevelLines("x = 1\n", ["a = 1", "b = 2"])).toBe(
-      "x = 1\na = 1\nb = 2\n",
-    );
+  it("mutateCodexFileCredentialsDoc forces file stores and scoped secret_auth_storage", () => {
+    const doc: Record<string, unknown> = {
+      secret_auth_storage: true,
+      features: { memories: false },
+    };
+    mutateCodexFileCredentialsDoc(doc);
+    expect(doc.cli_auth_credentials_store).toBe("file");
+    expect(doc.mcp_oauth_credentials_store).toBe("file");
+    expect(doc.secret_auth_storage).toBeUndefined();
+    expect(doc.features).toEqual({
+      memories: false,
+      secret_auth_storage: false,
+    });
   });
 
-  it("ensureSecretAuthStorageDisabled creates or updates [features]", () => {
-    expect(ensureSecretAuthStorageDisabled("")).toBe(
-      "[features]\nsecret_auth_storage = false\n",
-    );
-    expect(ensureSecretAuthStorageDisabled("x = 1\n")).toBe(
-      "x = 1\n\n[features]\nsecret_auth_storage = false\n",
-    );
-    expect(
-      ensureSecretAuthStorageDisabled(
-        "[features]\nsecret_auth_storage = true\n",
-      ),
-    ).toContain("secret_auth_storage = false");
-    expect(
-      ensureSecretAuthStorageDisabled("[features]\nmemories = false\n"),
-    ).toMatch(/\[features\]\nsecret_auth_storage = false/);
-  });
   let root: string;
   let sessionDir: string;
   let groupDir: string;
@@ -455,9 +441,9 @@ describe("process-runtime", () => {
     );
   });
 
-  it("isolates HOME/CODEX_HOME and writes Codex API-key auth stub", () => {
+  it("isolates HOME/CODEX_HOME and writes Codex API-key auth stub", async () => {
     const runtimeDir = path.join(sessionDir, ".process-runtime");
-    const homes = ensureProcessProviderHomes(
+    const homes = await ensureProcessProviderHomes(
       { id: "sess-1", agent_group_id: "ag" },
       runtimeDir,
     );
@@ -478,9 +464,10 @@ describe("process-runtime", () => {
     expect(
       readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
     ).toContain("[features]");
+    expect(codexHomeLockSizeForTests()).toBe(0);
 
     // Idempotent when symlinks already point at the shared dirs.
-    ensureProcessProviderHomes(
+    await ensureProcessProviderHomes(
       { id: "sess-1", agent_group_id: "ag" },
       runtimeDir,
     );
@@ -559,7 +546,7 @@ describe("process-runtime", () => {
       ),
     ).toBe(true);
 
-    // Missing top-level keys must be inserted BEFORE the first table, not at EOF.
+    // Missing top-level keys must be real top-level assignments (not under [features]).
     writeFileSync(
       path.join(homes.codexHome, "config.toml"),
       ["[features]", "memories = false", ""].join("\n"),
@@ -606,6 +593,58 @@ describe("process-runtime", () => {
       readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
     ).toContain("secret_auth_storage = false");
 
+    // Rahul #1: top-level secret_auth_storage must not leave [features] unset.
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      "secret_auth_storage = true\n\n[features]\nmemories = false\n",
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    const scoped = readFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      "utf8",
+    );
+    expect(scoped).toMatch(
+      /\[features\][\s\S]*secret_auth_storage\s*=\s*false/,
+    );
+    // Top-level stray key must be gone (only the [features] entry remains).
+    const { parse } = await import("smol-toml");
+    const scopedDoc = parse(scoped) as {
+      secret_auth_storage?: unknown;
+      features?: { secret_auth_storage?: unknown };
+    };
+    expect(scopedDoc.secret_auth_storage).toBeUndefined();
+    expect(scopedDoc.features?.secret_auth_storage).toBe(false);
+
+    // Mei #2: triple-quoted content that looks like a table must not be spliced.
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      'description = """\n[not a table]\n"""\n',
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    const afterTriple = readFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      "utf8",
+    );
+    expect(afterTriple).toContain("[not a table]");
+    expect(afterTriple).toContain('cli_auth_credentials_store = "file"');
+    expect(afterTriple.indexOf("cli_auth_credentials_store")).toBeLessThan(
+      afterTriple.indexOf("[features]"),
+    );
+
+    // Intentional: smol-toml round-trip drops comments (host-normalized file).
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      "# operator note — do not clobber\nx = 1\n",
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    const afterComment = readFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      "utf8",
+    );
+    expect(afterComment).not.toContain("operator note");
+    expect(afterComment).toContain("x = 1");
+    expect(afterComment).toContain('cli_auth_credentials_store = "file"');
+
     // Replace wrong symlink / non-symlink under synthetic HOME.
     rmSync(path.join(homes.home, ".claude"), { force: true });
     symlinkSync(
@@ -615,13 +654,36 @@ describe("process-runtime", () => {
     );
     rmSync(path.join(homes.home, ".codex"), { force: true });
     writeFileSync(path.join(homes.home, ".codex"), "not-a-dir");
-    ensureProcessProviderHomes(
+    await ensureProcessProviderHomes(
       { id: "sess-1", agent_group_id: "ag" },
       runtimeDir,
     );
     expect(lstatSync(path.join(homes.home, ".codex")).isSymbolicLink()).toBe(
       true,
     );
+  });
+
+  it("withCodexHomeLock serializes and drops map entries when idle", async () => {
+    const order: number[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = withCodexHomeLock(path.join(root, "codex-a"), async () => {
+      order.push(1);
+      await firstGate;
+      order.push(2);
+    });
+    // Give first waiter a turn to acquire.
+    await Promise.resolve();
+    const second = withCodexHomeLock(path.join(root, "codex-a"), () => {
+      order.push(3);
+    });
+    expect(codexHomeLockSizeForTests()).toBeGreaterThan(0);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual([1, 2, 3]);
+    expect(codexHomeLockSizeForTests()).toBe(0);
   });
 
   it("wakeProcess spawns bun with WORKING_ROOT and tracks pid", async () => {

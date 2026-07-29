@@ -5,7 +5,9 @@ import {
   writeFileSync,
   readFileSync,
   existsSync,
+  symlinkSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -78,6 +80,14 @@ describe("install lifecycle", () => {
         path.join(root, ".claude/skills/add-agenthost-process/SKILL.md"),
       ),
     ).toBe(true);
+    expect(installed.runtimeDepsAdded).toContain("smol-toml");
+    const pkg = JSON.parse(
+      readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(pkg.dependencies?.["smol-toml"]).toMatch(/^\^/);
+    expect(
+      readFileSync(path.join(root, "src/process-runtime.ts"), "utf8"),
+    ).toMatch(/from ["']smol-toml["']/);
 
     const index = readFileSync(path.join(root, "src/index.ts"), "utf8");
     expect(index).toContain("startAgenthostProcess");
@@ -93,6 +103,7 @@ describe("install lifecycle", () => {
 
     const upgraded = runUpgrade(root);
     expect(upgraded.unchanged.length).toBeGreaterThan(0);
+    expect(upgraded.runtimeDepsAdded).toEqual([]);
 
     printInstallNextSteps(installed);
 
@@ -108,6 +119,46 @@ describe("install lifecycle", () => {
     expect(readFileSync(path.join(root, "src/index.ts"), "utf8")).not.toContain(
       "startAgenthostProcess",
     );
+  });
+
+  it("verify accepts smol-toml listed under devDependencies", () => {
+    runInstall(root);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify(
+        {
+          name: "nanoclaw-fixture",
+          devDependencies: { "smol-toml": "^1.7.1" },
+        },
+        null,
+        2,
+      ),
+    );
+    expect(runVerify(root).ok).toBe(true);
+  });
+
+  it("verify fails when smol-toml is missing from package.json", () => {
+    runInstall(root);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "nanoclaw-fixture" }, null, 2),
+    );
+    const result = runVerify(root);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.includes("smol-toml"))).toBe(true);
+  });
+
+  it("installed fork can resolve smol-toml when node_modules is linked", () => {
+    runInstall(root);
+    const hostSmol = path.join(
+      packageRoot(),
+      "packages/host/node_modules/smol-toml",
+    );
+    expect(existsSync(hostSmol)).toBe(true);
+    mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    symlinkSync(hostSmol, path.join(root, "node_modules/smol-toml"));
+    const requireFromConsumer = createRequire(path.join(root, "package.json"));
+    expect(requireFromConsumer.resolve("smol-toml")).toContain("smol-toml");
   });
 
   it("install fails without agenthosts", () => {

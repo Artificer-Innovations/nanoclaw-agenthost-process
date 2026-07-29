@@ -121,3 +121,85 @@ export function readPackageVersion(): string {
   };
   return pkg.version ?? "0.0.0";
 }
+
+/**
+ * Runtime deps that copied host sources import (e.g. smol-toml from
+ * process-runtime.ts). Install must pin these on the consumer package.json —
+ * copying the file alone leaves the fork unable to resolve the module.
+ */
+export function consumerRuntimeDependencies(
+  startDir: string = __dirname,
+): Record<string, string> {
+  const hostPkgPath = path.join(
+    packageRoot(startDir),
+    "packages/host/package.json",
+  );
+  if (!fs.existsSync(hostPkgPath)) {
+    // Published layout: host package.json may be absent; fall back to skill
+    // resources sibling metadata is not available — use the known pin.
+    return { "smol-toml": "^1.7.1" };
+  }
+  const hostPkg = JSON.parse(fs.readFileSync(hostPkgPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+  };
+  const out: Record<string, string> = {};
+  const range = hostPkg.dependencies?.["smol-toml"];
+  if (range) out["smol-toml"] = range;
+  return out;
+}
+
+export function findMissingConsumerRuntimeDependencies(
+  nanoclawRoot: string,
+  startDir: string = __dirname,
+): string[] {
+  const required = consumerRuntimeDependencies(startDir);
+  const pkgPath = path.join(nanoclawRoot, "package.json");
+  if (!fs.existsSync(pkgPath)) {
+    return Object.keys(required).map(
+      (name) => `missing dependency ${name} in package.json`,
+    );
+  }
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const missing: string[] = [];
+  for (const name of Object.keys(required)) {
+    if (!pkg.dependencies?.[name] && !pkg.devDependencies?.[name]) {
+      missing.push(
+        `missing dependency ${name} in package.json (required by process-runtime.ts)`,
+      );
+    }
+  }
+  return missing;
+}
+
+/** Ensure consumer package.json lists runtime deps imported by copied host sources. */
+export function ensureConsumerRuntimeDependencies(
+  nanoclawRoot: string,
+  startDir: string = __dirname,
+): { changed: boolean; added: string[] } {
+  const required = consumerRuntimeDependencies(startDir);
+  const pkgPath = path.join(nanoclawRoot, "package.json");
+  if (!fs.existsSync(pkgPath)) {
+    throw new Error(`Missing package.json at ${pkgPath}`);
+  }
+  const raw = fs.readFileSync(pkgPath, "utf8");
+  const pkg = JSON.parse(raw) as {
+    dependencies?: Record<string, string>;
+    [key: string]: unknown;
+  };
+  const dependencies = { ...(pkg.dependencies ?? {}) };
+  const added: string[] = [];
+  for (const [name, range] of Object.entries(required)) {
+    if (!dependencies[name]) {
+      dependencies[name] = range;
+      added.push(name);
+    }
+  }
+  if (!added.length) return { changed: false, added: [] };
+  pkg.dependencies = dependencies;
+  const next = `${JSON.stringify(pkg, null, 2)}\n`;
+  fs.writeFileSync(pkgPath, next);
+  return { changed: true, added };
+}

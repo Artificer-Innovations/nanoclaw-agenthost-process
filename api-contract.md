@@ -48,9 +48,13 @@ Driver name: **`process`**. `requiredTransport` is unset (filesystem mailbox OK)
 
 ## Host opt-in
 
-`NANOCLAW_ALLOW_PROCESS_RUNTIME=1` (or `true` / `yes`) must be set on the host process — via NanoClaw `.env` (process boot applies it when unset) or LaunchAgent / shell env. Without it, `wake` fails closed even when a group has `runtime=process`.
+`NANOCLAW_ALLOW_PROCESS_RUNTIME=1` (or `true` / `yes`) must be set on the host process — via NanoClaw `.env` (process boot applies it when unset) or LaunchAgent / shell env. Without it, `wake` fails closed even when a group has `runtime=process`. Prefer `.env` with mode `0600` / owner-only and gitignored; an already-set `process.env` value wins over `.env`.
 
 After `WAKE_FAIL_BLOCK_AFTER` (5) consecutive fail-closed wakes for a session, the driver writes `WORKING_ROOT/.process.wake-blocked` and logs an error.
+
+## Process Codex `config.toml`
+
+On wake, the process driver ensures per-group `CODEX_HOME/config.toml` forces file-backed credential stores and `[features].secret_auth_storage = false`. The file is **host-normalized** (structured TOML rewrite — comments/ordering may change). In-process locking serializes concurrent wakes for the same `codexHome`; cross-host multi-writer locking is out of scope for 0.1.0.
 
 ## WakeContext (consumed fields)
 

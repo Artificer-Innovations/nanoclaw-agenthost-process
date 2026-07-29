@@ -7,9 +7,11 @@
  * agenthosts v1 calls `wake(session, {})` — this driver resolves session/group
  * paths from NanoClaw host modules when WakeContext does not supply them.
  */
+import { randomBytes } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 import type { RuntimeDriver, SessionRef, WakeContext } from "./agenthosts.js";
 import { DATA_DIR, GROUPS_DIR } from "./config.js";
@@ -380,20 +382,101 @@ function ensureDirSymlink(linkPath: string, target: string): void {
 }
 
 /**
+ * In-process per-codexHome mutex for credential-home writers.
+ * Cross-host / multi-process writers are out of scope for 0.1.0 (single
+ * LaunchAgent host). Entries are removed when the tail waiter finishes so
+ * ephemeral agent groups do not grow the map unboundedly.
+ */
+const codexHomeLocks = new Map<string, Promise<void>>();
+
+export async function withCodexHomeLock(
+  codexHome: string,
+  fn: () => void | Promise<void>,
+): Promise<void> {
+  const key = path.resolve(codexHome);
+  const prev = codexHomeLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = prev.then(() => gate);
+  codexHomeLocks.set(key, tail);
+  try {
+    await prev;
+    await fn();
+  } finally {
+    release();
+    if (codexHomeLocks.get(key) === tail) {
+      codexHomeLocks.delete(key);
+    }
+  }
+}
+
+/** Test helper — in-flight lock map size (should be 0 when idle). */
+export function codexHomeLockSizeForTests(): number {
+  return codexHomeLocks.size;
+}
+
+type TomlTable = Record<string, unknown>;
+
+function asTomlTable(value: unknown): TomlTable {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as TomlTable;
+  }
+  return {};
+}
+
+/**
+ * Host-owned mutation of per-group Codex config.toml. smol-toml is not
+ * format-preserving — comments and key order are normalized on every wake.
+ * This file is synthesized for process-mode homes; do not rely on hand-edited
+ * comments surviving.
+ */
+export function mutateCodexFileCredentialsDoc(doc: TomlTable): void {
+  doc.cli_auth_credentials_store = "file";
+  doc.mcp_oauth_credentials_store = "file";
+  // Upgrade path: older regex writers may have set a stray top-level key.
+  delete doc.secret_auth_storage;
+  const features = asTomlTable(doc.features);
+  features.secret_auth_storage = false;
+  doc.features = features;
+}
+
+/** Write with mode at create time — no post-rename chmod window. */
+function atomicWriteFileSync(
+  target: string,
+  content: string,
+  mode = 0o600,
+): void {
+  const temporary = `${target}.agenthost-process-${process.pid}-${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(temporary, content, { mode });
+    fs.renameSync(temporary, target);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+/**
  * Isolate provider state from the host user's $HOME (LaunchAgents inherit the
  * operator HOME). Without this, Codex picks up ChatGPT login from ~/.codex /
  * Keychain and bypasses OneCLI API-key injection on the gateway.
+ *
+ * Auth stub + config.toml credential-store writes share one per-codexHome lock.
  */
-export function ensureProcessProviderHomes(
+export async function ensureProcessProviderHomes(
   session: SessionRef,
   runtimeDir: string,
-): { home: string; codexHome: string; claudeHome: string } {
+): Promise<{ home: string; codexHome: string; claudeHome: string }> {
   const home = path.join(runtimeDir, "home");
   fs.mkdirSync(home, { recursive: true });
 
   const codexHome = codexSharedDir(session.agent_group_id);
   fs.mkdirSync(codexHome, { recursive: true });
-  ensureCodexApiKeyAuthStub(codexHome);
+  await withCodexHomeLock(codexHome, () => {
+    ensureCodexApiKeyAuthStub(codexHome);
+    ensureCodexFileCredentialsStore(codexHome);
+  });
 
   const claudeHome = claudeSharedDir(session.agent_group_id);
   fs.mkdirSync(claudeHome, { recursive: true });
@@ -437,6 +520,37 @@ export function ensureCodexApiKeyAuthStub(codexHome: string): void {
   }
 
   fs.writeFileSync(authPath, sentinel, { mode: 0o600 });
+}
+
+/**
+ * Keep Codex off the OS keyring. Default stores are keyring/auto — on macOS
+ * LaunchAgent children that probe Security.framework get a Keychain popup
+ * even with an isolated HOME + auth.json apikey stub.
+ *
+ * Always forces (via structured TOML parse → mutate → stringify):
+ *   cli_auth_credentials_store = "file"
+ *   mcp_oauth_credentials_store = "file"
+ *   [features] secret_auth_storage = false
+ * including brand-new / empty config.toml.
+ *
+ * Normalizes the file (comments/ordering may change). Callers that race other
+ * writers should hold `withCodexHomeLock` (see ensureProcessProviderHomes).
+ */
+export function ensureCodexFileCredentialsStore(codexHome: string): void {
+  const configPath = path.join(codexHome, "config.toml");
+  let existing = "";
+  try {
+    existing = fs.readFileSync(configPath, "utf8");
+  } catch {
+    // treat as empty
+  }
+
+  const doc = asTomlTable(parseToml(existing || ""));
+  mutateCodexFileCredentialsDoc(doc);
+  const next = `${stringifyToml(doc).trimEnd()}\n`;
+  if (next !== existing) {
+    atomicWriteFileSync(configPath, next, 0o600);
+  }
 }
 
 export function ensureAgentSymlink(
@@ -765,7 +879,7 @@ export async function wakeProcess(
     clearHeartbeat();
 
     const runtimeDir = runtimeDirPath(sessionDirectory);
-    const homes = ensureProcessProviderHomes(session, runtimeDir);
+    const homes = await ensureProcessProviderHomes(session, runtimeDir);
     const onecli = await applyProcessEnv({
       runtimeDir,
       agentIdentifier,
@@ -933,6 +1047,7 @@ function listDirs(parent: string): string[] {
 export function resetProcessDriverStateForTests(): void {
   activeChildren.clear();
   wakeFailures.clear();
+  codexHomeLocks.clear();
 }
 
 export const processDriver: RuntimeDriver = {

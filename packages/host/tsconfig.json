@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDirs": ["src", "type-fixtures"],
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src", "type-fixtures"],
+  "exclude": ["src/**/*.test.ts"]
+}

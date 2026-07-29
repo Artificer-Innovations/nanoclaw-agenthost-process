@@ -1,0 +1,78 @@
+{
+  "name": "nanoclaw-agenthost-process",
+  "version": "0.1.0",
+  "description": "Local child-process RuntimeDriver for NanoClaw agenthosts — run agents without Docker",
+  "type": "module",
+  "license": "MIT",
+  "author": "Artificer Innovations, LLC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Artificer-Innovations/nanoclaw-agenthost-process"
+  },
+  "homepage": "https://github.com/Artificer-Innovations/nanoclaw-agenthost-process",
+  "bugs": {
+    "url": "https://github.com/Artificer-Innovations/nanoclaw-agenthost-process/issues"
+  },
+  "keywords": [
+    "nanoclaw",
+    "ai-agent",
+    "agenthost",
+    "process",
+    "runtime"
+  ],
+  "bin": {
+    "nanoclaw-agenthost-process": "./dist/cli/bin.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "api-contract.md",
+    "README.md",
+    "QUICKSTART.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @nanoclaw-agenthost-process/cli build && node scripts/sync-resources.mjs && node scripts/verify-publish-entry.mjs",
+    "typecheck": "pnpm --filter @nanoclaw-agenthost-process/cli --filter @nanoclaw-agenthost-process/host typecheck",
+    "lint": "prettier --check \"packages/**/*.{ts,json,md}\" \"skills/**/*.md\" \"*.md\" \"scripts/**/*.mjs\"",
+    "lint:fix": "prettier --write \"packages/**/*.{ts,json,md}\" \"skills/**/*.md\" \"*.md\" \"scripts/**/*.mjs\"",
+    "test:unit": "pnpm -r test:unit",
+    "test:coverage": "pnpm --filter @nanoclaw-agenthost-process/cli test:coverage && pnpm --filter @nanoclaw-agenthost-process/host test:coverage",
+    "test:integration": "node scripts/run-integration.mjs",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release:publish": "npm publish --provenance --access public",
+    "prepublishOnly": "pnpm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "nanoclaw-agenthosts": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "nanoclaw-agenthosts": {
+      "optional": true
+    }
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": ["nanoclaw-agenthosts"]
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/cli": "^2.29.4",
+    "@types/node": "^22.15.30",
+    "@vitest/coverage-v8": "^3.2.4",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

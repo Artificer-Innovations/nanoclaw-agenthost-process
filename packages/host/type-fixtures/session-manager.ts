@@ -1,6 +1,6 @@
 /** CI-only stub — real module exists once installed into a NanoClaw host. */
 import path from "node:path";
-import { DATA_DIR } from "../config.js";
+import { DATA_DIR } from "./config.js";
 
 export function sessionDir(agentGroupId: string, sessionId: string): string {
   return path.join(DATA_DIR, "v2-sessions", agentGroupId, sessionId);

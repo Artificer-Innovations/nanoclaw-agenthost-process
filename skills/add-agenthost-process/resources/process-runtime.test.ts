@@ -7,7 +7,11 @@ import {
   writeFileSync,
   existsSync,
   symlinkSync,
+  lstatSync,
+  readlinkSync,
+  chmodSync,
 } from "node:fs";
+import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +38,9 @@ vi.mock("./config.js", () => ({
 }));
 
 vi.mock("./db/agent-groups.js", () => ({
-  getAgentGroup: vi.fn((id: string) => ({ id, name: id, folder: id })),
+  getAgentGroup: vi.fn((id: string) =>
+    id === "missing-group" ? undefined : { id, name: id, folder: id },
+  ),
 }));
 
 vi.mock("./session-manager.js", () => ({
@@ -59,10 +65,19 @@ vi.mock("node:child_process", async () => {
 });
 
 import { applyProcessEnv } from "./process-onecli.js";
+import { getAgentGroup } from "./db/agent-groups.js";
+import { log } from "./log.js";
 import {
+  markContainerRunning,
+  markContainerStopped,
+} from "./session-manager.js";
+import {
+  augmentHostToolPath,
   buildProcessAgentEnv,
   cleanupProcessOrphans,
   ensureAgentSymlink,
+  ensureCodexApiKeyAuthStub,
+  ensureProcessProviderHomes,
   isPidAlive,
   isProcessRunning,
   killTracked,
@@ -70,19 +85,20 @@ import {
   processDriver,
   readPidFile,
   resetProcessDriverStateForTests,
+  resolveWakePaths,
   rewriteSessionioBaseUrlForHost,
   wakeProcess,
   writePidFile,
   KILL_GRACE_MS,
 } from "./process-runtime.js";
 
-function makeChild(pid: number): EventEmitter & {
-  pid: number;
+function makeChild(pid: number | undefined): EventEmitter & {
+  pid: number | undefined;
   stderr: EventEmitter;
   stdout: EventEmitter;
 } {
   const child = new EventEmitter() as EventEmitter & {
-    pid: number;
+    pid: number | undefined;
     stderr: EventEmitter;
     stdout: EventEmitter;
   };
@@ -97,6 +113,8 @@ describe("process-runtime", () => {
   let sessionDir: string;
   let groupDir: string;
   let runnerEntry: string;
+  const prevPathPrefix = process.env.NANOCLAW_PROCESS_PATH_PREFIX;
+  const prevBunBin = process.env.NANOCLAW_BUN_BIN;
 
   beforeEach(() => {
     resetProcessDriverStateForTests();
@@ -118,14 +136,26 @@ describe("process-runtime", () => {
   afterEach(() => {
     resetProcessDriverStateForTests();
     rmSync(root, { recursive: true, force: true });
+    rmSync("/tmp/nanoclaw-data-fixture", { recursive: true, force: true });
+    rmSync("/tmp/sessions", { recursive: true, force: true });
+    if (prevPathPrefix === undefined)
+      delete process.env.NANOCLAW_PROCESS_PATH_PREFIX;
+    else process.env.NANOCLAW_PROCESS_PATH_PREFIX = prevPathPrefix;
+    if (prevBunBin === undefined) delete process.env.NANOCLAW_BUN_BIN;
+    else process.env.NANOCLAW_BUN_BIN = prevBunBin;
   });
 
   it("rewrites sessionio base URL for host process agents", () => {
     expect(
-      rewriteSessionioBaseUrlForHost(
-        "http://host.docker.internal:18765",
-      ),
+      rewriteSessionioBaseUrlForHost("http://host.docker.internal:18765"),
     ).toBe("http://127.0.0.1:18765");
+    expect(rewriteSessionioBaseUrlForHost("http://host.docker.internal/")).toBe(
+      "http://127.0.0.1",
+    );
+    expect(
+      rewriteSessionioBaseUrlForHost("http://host.docker.internal/path/"),
+    ).toBe("http://127.0.0.1/path/");
+    expect(rewriteSessionioBaseUrlForHost("not a url")).toBe("not a url");
     expect(
       buildProcessAgentEnv(
         { id: "sess-1", agent_group_id: "ag-1" },
@@ -145,6 +175,34 @@ describe("process-runtime", () => {
     });
   });
 
+  it("injects sessionio for http transport and merges NO_PROXY", () => {
+    const env = buildProcessAgentEnv(
+      { id: "sess-1", agent_group_id: "ag-1" },
+      "/tmp/sess",
+      {
+        SESSIONIO_TRANSPORT: "HTTP",
+        SESSIONIO_BASE_URL: "http://127.0.0.1:9",
+        NO_PROXY: "example.com",
+        no_proxy: "other.com",
+      },
+    );
+    expect(env.SESSIONIO_TRANSPORT).toBe("HTTP");
+    expect(env.NO_PROXY).toContain("example.com");
+    expect(env.NO_PROXY).toContain("127.0.0.1");
+    expect(env.no_proxy).toContain("other.com");
+  });
+
+  it("skips sessionio session/group injection for filesystem transport", () => {
+    const env = buildProcessAgentEnv(
+      { id: "sess-1", agent_group_id: "ag-1" },
+      "/tmp/sess",
+      { SESSIONIO_TRANSPORT: "filesystem", SESSIONIO_HTTP_TOKEN: "tok" },
+    );
+    // Token may remain from the host env spread; session/group ids are process-only.
+    expect(env.SESSIONIO_SESSION_ID).toBeUndefined();
+    expect(env.SESSIONIO_AGENT_GROUP_ID).toBeUndefined();
+  });
+
   it("augments PATH so LaunchAgent hosts can find Homebrew tools", () => {
     const env = buildProcessAgentEnv(
       { id: "sess-1", agent_group_id: "ag-1" },
@@ -152,9 +210,14 @@ describe("process-runtime", () => {
       { PATH: "/usr/bin:/bin", HOME: process.env.HOME },
     );
     expect(env.PATH).toContain("/opt/homebrew/bin");
-    expect(env.PATH!.startsWith("/opt/homebrew/bin") || env.PATH!.includes("/opt/homebrew/bin:")).toBe(
-      true,
-    );
+  });
+
+  it("honors NANOCLAW_PROCESS_PATH_PREFIX for tool discovery", () => {
+    const extra = path.join(root, "tools-bin");
+    mkdirSync(extra, { recursive: true });
+    process.env.NANOCLAW_PROCESS_PATH_PREFIX = `${extra}${path.delimiter}/missing-skip`;
+    const result = augmentHostToolPath("/usr/bin", process.env.HOME);
+    expect(result.startsWith(extra)).toBe(true);
   });
 
   it("wakeProcess resolves paths from host modules when ctx is empty", async () => {
@@ -186,6 +249,52 @@ describe("process-runtime", () => {
     }
   });
 
+  it("resolveWakePaths returns null when agent group is missing", () => {
+    expect(
+      resolveWakePaths({ id: "s", agent_group_id: "missing-group" }, {}),
+    ).toBeNull();
+    expect(log.error).toHaveBeenCalled();
+  });
+
+  it("wakeProcess returns false when resolveWakePaths fails", async () => {
+    expect(
+      await wakeProcess({ id: "s", agent_group_id: "missing-group" }, {}),
+    ).toBe(false);
+  });
+
+  it("resolveWakePaths uses default lifecycle hooks when ctx omits them", () => {
+    const markStopped = vi.fn();
+    const resolved = resolveWakePaths(
+      { id: "sess-hooks", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        markStopped,
+      },
+    );
+    expect(resolved).not.toBeNull();
+    mkdirSync(path.dirname(`/tmp/sessions/ag/sess-hooks/.heartbeat`), {
+      recursive: true,
+    });
+    writeFileSync(`/tmp/sessions/ag/sess-hooks/.heartbeat`, "1");
+    resolved!.clearHeartbeat();
+    resolved!.markRunning();
+    resolved!.markStopped();
+    expect(markContainerRunning).toHaveBeenCalledWith("sess-hooks");
+    expect(markStopped).toHaveBeenCalled();
+  });
+
+  it("resolveWakePaths empty ctx exposes default markStopped", () => {
+    const resolved = resolveWakePaths(
+      { id: "sess-default-hooks", agent_group_id: "ag" },
+      {},
+    );
+    expect(resolved).not.toBeNull();
+    resolved!.markStopped();
+    expect(markContainerStopped).toHaveBeenCalledWith("sess-default-hooks");
+  });
+
   it("ensureAgentSymlink creates agent → groupDir link", () => {
     ensureAgentSymlink(sessionDir, groupDir);
     expect(existsSync(path.join(sessionDir, "agent"))).toBe(true);
@@ -195,6 +304,87 @@ describe("process-runtime", () => {
     ensureAgentSymlink(sessionDir, groupDir);
     ensureAgentSymlink(sessionDir, groupDir);
     expect(existsSync(path.join(sessionDir, "agent"))).toBe(true);
+  });
+
+  it("ensureAgentSymlink replaces empty Docker mountpoint dir", () => {
+    mkdirSync(path.join(sessionDir, "agent"), { recursive: true });
+    ensureAgentSymlink(sessionDir, groupDir);
+    expect(lstatSync(path.join(sessionDir, "agent")).isSymbolicLink()).toBe(
+      true,
+    );
+  });
+
+  it("ensureAgentSymlink refuses non-empty agent directory", () => {
+    const agentDir = path.join(sessionDir, "agent");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(path.join(agentDir, "keep.txt"), "x");
+    ensureAgentSymlink(sessionDir, groupDir);
+    expect(existsSync(path.join(agentDir, "keep.txt"))).toBe(true);
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("ensureAgentSymlink replaces a non-directory file", () => {
+    writeFileSync(path.join(sessionDir, "agent"), "file");
+    ensureAgentSymlink(sessionDir, groupDir);
+    expect(lstatSync(path.join(sessionDir, "agent")).isSymbolicLink()).toBe(
+      true,
+    );
+  });
+
+  it("isolates HOME/CODEX_HOME and writes Codex API-key auth stub", () => {
+    const runtimeDir = path.join(sessionDir, ".process-runtime");
+    const homes = ensureProcessProviderHomes(
+      { id: "sess-1", agent_group_id: "ag" },
+      runtimeDir,
+    );
+    expect(homes.home).toBe(path.join(runtimeDir, "home"));
+    expect(readlinkSync(path.join(homes.home, ".codex"))).toBe(homes.codexHome);
+    expect(
+      readFileSync(path.join(homes.codexHome, "auth.json"), "utf8"),
+    ).toContain('"auth_mode": "apikey"');
+
+    // Idempotent when symlinks already point at the shared dirs.
+    ensureProcessProviderHomes(
+      { id: "sess-1", agent_group_id: "ag" },
+      runtimeDir,
+    );
+
+    // Keep OneCLI stub content when already present.
+    writeFileSync(
+      path.join(homes.codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "apikey",
+        OPENAI_API_KEY: "from-stub",
+      }),
+    );
+    ensureCodexApiKeyAuthStub(homes.codexHome);
+    expect(
+      readFileSync(path.join(homes.codexHome, "auth.json"), "utf8"),
+    ).toContain("from-stub");
+
+    // Replace empty / legacy auth.
+    writeFileSync(path.join(homes.codexHome, "auth.json"), "{}\n");
+    ensureCodexApiKeyAuthStub(homes.codexHome);
+    expect(
+      readFileSync(path.join(homes.codexHome, "auth.json"), "utf8"),
+    ).toContain("placeholder");
+
+    // Replace wrong symlink / non-symlink under synthetic HOME.
+    rmSync(path.join(homes.home, ".claude"), { force: true });
+    symlinkSync(
+      path.join(root, "wrong"),
+      path.join(homes.home, ".claude"),
+      "dir",
+    );
+    rmSync(path.join(homes.home, ".codex"), { force: true });
+    writeFileSync(path.join(homes.home, ".codex"), "not-a-dir");
+    ensureProcessProviderHomes(
+      { id: "sess-1", agent_group_id: "ag" },
+      runtimeDir,
+    );
+    expect(lstatSync(path.join(homes.home, ".codex")).isSymbolicLink()).toBe(
+      true,
+    );
   });
 
   it("wakeProcess spawns bun with WORKING_ROOT and tracks pid", async () => {
@@ -229,9 +419,7 @@ describe("process-runtime", () => {
       path.join(sessionDir, ".process-runtime", "home"),
     );
     expect(opts.env.CODEX_HOME).toContain(path.join(".codex-shared"));
-    expect(existsSync(path.join(opts.env.CODEX_HOME!, "auth.json"))).toBe(
-      true,
-    );
+    expect(existsSync(path.join(opts.env.CODEX_HOME!, "auth.json"))).toBe(true);
     expect(
       readFileSync(path.join(opts.env.CODEX_HOME!, "auth.json"), "utf8"),
     ).toContain('"auth_mode": "apikey"');
@@ -240,13 +428,11 @@ describe("process-runtime", () => {
     expect(clearHeartbeat).toHaveBeenCalled();
     expect(isProcessRunning("sess-1")).toBe(true);
 
-    // second wake is no-op
     expect(
       await wakeProcess(
         { id: "sess-1", agent_group_id: "ag" },
         {
           sessionDir,
-
           groupDir,
           agentRunnerEntry: runnerEntry,
           agentGroupName: "Agent",
@@ -287,7 +473,39 @@ describe("process-runtime", () => {
     expect(ok).toBe(false);
   });
 
-  it("killTracked sends SIGTERM and clears on close", async () => {
+  it("wakeProcess returns false when spawn yields no pid", async () => {
+    spawnMock.mockReturnValue(makeChild(undefined));
+    const ok = await wakeProcess(
+      { id: "sess-1", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    expect(ok).toBe(false);
+  });
+
+  it("wakeProcess returns false when applyProcessEnv throws", async () => {
+    vi.mocked(applyProcessEnv).mockRejectedValue(new Error("boom"));
+    const ok = await wakeProcess(
+      { id: "sess-1", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    expect(ok).toBe(false);
+  });
+
+  it("wakeProcess logs stderr and non-zero exit", async () => {
     const child = makeChild(process.pid);
     spawnMock.mockReturnValue(child);
     await wakeProcess(
@@ -298,25 +516,133 @@ describe("process-runtime", () => {
         agentRunnerEntry: runnerEntry,
         agentGroupName: "Agent",
         agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    const lines = Array.from({ length: 12 }, (_, i) => `err-line-${i}`).join(
+      "\n",
+    );
+    child.stderr.emit("data", Buffer.from(`${lines}\n\nextra-after-blank\n`));
+    child.stdout.emit("data", Buffer.from("out"));
+    child.emit("close", 1);
+    expect(log.warn).toHaveBeenCalled();
+    expect(isProcessRunning("sess-1")).toBe(false);
+  });
+
+  it("wakeProcess tolerates missing stderr/stdout streams", async () => {
+    const child = makeChild(process.pid);
+    // Optional chaining on pipe streams when spawn omits them.
+    (child as { stderr: EventEmitter | undefined }).stderr = undefined;
+    (child as { stdout: EventEmitter | undefined }).stdout = undefined;
+    spawnMock.mockReturnValue(child);
+    const ok = await wakeProcess(
+      { id: "sess-nostdio", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    expect(ok).toBe(true);
+    child.emit("close", 0);
+  });
+
+  it("wakeProcess handles spawn error events", async () => {
+    const child = makeChild(process.pid);
+    spawnMock.mockReturnValue(child);
+    await wakeProcess(
+      { id: "sess-err", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    child.emit("error", new Error("spawn fail"));
+    expect(log.error).toHaveBeenCalled();
+    expect(isProcessRunning("sess-err")).toBe(false);
+  });
+
+  it("killTracked sends SIGTERM then SIGKILL when still alive", async () => {
+    const child = makeChild(process.pid);
+    spawnMock.mockReturnValue(child);
+    await wakeProcess(
+      { id: "sess-1", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
       },
     );
 
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     const onExit = vi.fn();
-    killTracked("sess-1", "idle", onExit, 10);
+    killTracked("sess-1", "idle", onExit, 5);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGKILL");
     child.emit("close", 0);
     expect(onExit).toHaveBeenCalled();
     killSpy.mockRestore();
   });
 
-  it("processDriver.kill is a no-op when not running", () => {
+  it("killTracked is a no-op when not running", () => {
     expect(() => processDriver.kill("missing", "x")).not.toThrow();
   });
 
-  it("cleanupProcessOrphans reaps pidfiles", () => {
+  it("terminatePid swallows ESRCH", async () => {
+    const child = makeChild(process.pid);
+    spawnMock.mockReturnValue(child);
+    await wakeProcess(
+      { id: "sess-1", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+    });
+    expect(() => killTracked("sess-1", "gone", undefined, 1)).not.toThrow();
+    killSpy.mockRestore();
+  });
+
+  it("isProcessRunning forgets dead tracked pids", async () => {
+    const child = makeChild(2_147_483_647);
+    spawnMock.mockReturnValue(child);
+    await wakeProcess(
+      { id: "sess-dead", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    expect(isProcessRunning("sess-dead")).toBe(false);
+  });
+
+  it("cleanupProcessOrphans reaps dead pidfiles", () => {
     const sessionsRoot = path.join(root, "v2-sessions");
     const orphanSession = path.join(sessionsRoot, "ag", "old");
+    const emptySession = path.join(sessionsRoot, "ag", "empty");
     mkdirSync(orphanSession, { recursive: true });
+    mkdirSync(emptySession, { recursive: true });
     writePidFile(orphanSession, 1);
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
       throw new Error("ESRCH");
@@ -324,6 +650,154 @@ describe("process-runtime", () => {
     cleanupProcessOrphans(sessionsRoot);
     expect(existsSync(pidFilePath(orphanSession))).toBe(false);
     killSpy.mockRestore();
+  });
+
+  it("cleanupProcessOrphans SIGTERMs live orphans then SIGKILLs", async () => {
+    const sessionsRoot = path.join(root, "v2-sessions");
+    const orphanSession = path.join(sessionsRoot, "ag", "live");
+    mkdirSync(orphanSession, { recursive: true });
+    writePidFile(orphanSession, process.pid);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    cleanupProcessOrphans(sessionsRoot);
+    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGTERM");
+    await new Promise((r) => setTimeout(r, KILL_GRACE_MS + 20));
+    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGKILL");
+    killSpy.mockRestore();
+  });
+
+  it("cleanupProcessOrphans discovers default sessions root under cwd", () => {
+    const prev = process.cwd();
+    process.chdir(root);
+    try {
+      const sessionsRoot = path.join(root, "data/v2-sessions/ag/sess");
+      mkdirSync(sessionsRoot, { recursive: true });
+      writePidFile(sessionsRoot, 1);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw new Error("ESRCH");
+      });
+      processDriver.cleanupOrphans?.();
+      expect(existsSync(pidFilePath(sessionsRoot))).toBe(false);
+      killSpy.mockRestore();
+    } finally {
+      process.chdir(prev);
+    }
+  });
+
+  it("cleanupProcessOrphans falls back to data/sessions", () => {
+    const prev = process.cwd();
+    process.chdir(root);
+    try {
+      const sessionsRoot = path.join(root, "data/sessions/ag/sess");
+      mkdirSync(sessionsRoot, { recursive: true });
+      writePidFile(sessionsRoot, 1);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw new Error("ESRCH");
+      });
+      cleanupProcessOrphans();
+      expect(existsSync(pidFilePath(sessionsRoot))).toBe(false);
+      killSpy.mockRestore();
+    } finally {
+      process.chdir(prev);
+    }
+  });
+
+  it("cleanupProcessOrphans no-ops when default sessions roots are absent", () => {
+    const prev = process.cwd();
+    const empty = mkdtempSync(path.join(tmpdir(), "ahp-nosess-"));
+    process.chdir(empty);
+    try {
+      expect(() => cleanupProcessOrphans()).not.toThrow();
+    } finally {
+      process.chdir(prev);
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("cleanupProcessOrphans no-ops when sessions root missing", () => {
+    expect(() =>
+      cleanupProcessOrphans(path.join(root, "no-such-sessions")),
+    ).not.toThrow();
+  });
+
+  it("resolves bun from HOME/.bun/bin when executable", async () => {
+    const bunDir = path.join(root, ".bun/bin");
+    mkdirSync(bunDir, { recursive: true });
+    const bunPath = path.join(bunDir, "bun");
+    writeFileSync(bunPath, "#!/bin/sh\n");
+    chmodSync(bunPath, 0o755);
+    const prevHome = process.env.HOME;
+    process.env.HOME = root;
+    delete process.env.NANOCLAW_BUN_BIN;
+    const child = makeChild(process.pid);
+    spawnMock.mockReturnValue(child);
+    try {
+      await wakeProcess(
+        { id: "sess-home-bun", agent_group_id: "ag" },
+        {
+          sessionDir,
+          groupDir,
+          agentRunnerEntry: runnerEntry,
+          agentGroupName: "Agent",
+          agentIdentifier: "ag",
+        },
+      );
+      expect(spawnMock.mock.calls[0]![0]).toBe(bunPath);
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+  });
+
+  it("falls back to bun on PATH when no executable candidates exist", async () => {
+    const prevHome = process.env.HOME;
+    delete process.env.HOME;
+    delete process.env.NANOCLAW_BUN_BIN;
+    const child = makeChild(process.pid);
+    spawnMock.mockReturnValue(child);
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    try {
+      await wakeProcess(
+        { id: "sess-bun-fallback", agent_group_id: "ag" },
+        {
+          sessionDir,
+          groupDir,
+          agentRunnerEntry: runnerEntry,
+          agentGroupName: "Agent",
+          agentIdentifier: "ag",
+        },
+      );
+      expect(spawnMock.mock.calls[0]![0]).toBe("bun");
+    } finally {
+      accessSpy.mockRestore();
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+  });
+
+  it("readPidFile returns null for missing/invalid files", () => {
+    expect(readPidFile(path.join(root, "empty"))).toBeNull();
+    mkdirSync(path.join(root, "empty"), { recursive: true });
+    writeFileSync(pidFilePath(path.join(root, "empty")), "nope\n");
+    expect(readPidFile(path.join(root, "empty"))).toBeNull();
+  });
+
+  it("uses NANOCLAW_BUN_BIN when set", async () => {
+    process.env.NANOCLAW_BUN_BIN = "/custom/bun";
+    const child = makeChild(process.pid);
+    spawnMock.mockReturnValue(child);
+    await wakeProcess(
+      { id: "sess-bun", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+      },
+    );
+    expect(spawnMock.mock.calls[0]![0]).toBe("/custom/bun");
   });
 
   it("isPidAlive returns boolean", () => {
@@ -340,7 +814,10 @@ describe("process-runtime", () => {
     mkdirSync(wrong, { recursive: true });
     symlinkSync(wrong, path.join(sessionDir, "agent"), "dir");
     ensureAgentSymlink(sessionDir, groupDir);
-    expect(readFileSync).toBeTypeOf("function");
     expect(existsSync(path.join(sessionDir, "agent"))).toBe(true);
+  });
+
+  it("getAgentGroup mock supports missing groups", () => {
+    expect(getAgentGroup("missing-group")).toBeUndefined();
   });
 });

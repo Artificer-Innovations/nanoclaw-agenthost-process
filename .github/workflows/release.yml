@@ -38,6 +38,7 @@ jobs:
           pnpm run lint
           pnpm run test:coverage
           pnpm run build
+          pnpm run test:integration
 
       - name: Read version
         id: version

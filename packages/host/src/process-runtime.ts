@@ -162,10 +162,8 @@ function resolveBunBinary(explicit?: string): string {
     home ? path.join(home, ".bun/bin/bun") : "",
     "/opt/homebrew/bin/bun",
     "/usr/local/bin/bun",
-    "bun",
   ].filter(Boolean);
   for (const candidate of candidates) {
-    if (candidate === "bun") return candidate;
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
       return candidate;
@@ -267,7 +265,9 @@ function ensureDirSymlink(linkPath: string, target: string): void {
   if (existing) {
     if (existing.isSymbolicLink()) {
       const current = fs.readlinkSync(linkPath);
-      if (path.resolve(path.dirname(linkPath), current) === path.resolve(target))
+      if (
+        path.resolve(path.dirname(linkPath), current) === path.resolve(target)
+      )
         return;
       fs.unlinkSync(linkPath);
     } else {

@@ -126,7 +126,10 @@ export function patchWorkingRootCwd(content: string): string {
   }
   // Docker default is /workspace/agent; process mode needs the resolved CWD.
   if (next.includes("ensureMemoryScaffold();")) {
-    next = next.replace("ensureMemoryScaffold();", "ensureMemoryScaffold(CWD);");
+    next = next.replace(
+      "ensureMemoryScaffold();",
+      "ensureMemoryScaffold(CWD);",
+    );
   }
   return next;
 }
@@ -140,7 +143,10 @@ export function unpatchWorkingRootCwd(content: string): string {
     next = next.replace(pattern, `const CWD = '/workspace/agent';`);
   }
   if (next.includes("ensureMemoryScaffold(CWD);")) {
-    next = next.replace("ensureMemoryScaffold(CWD);", "ensureMemoryScaffold();");
+    next = next.replace(
+      "ensureMemoryScaffold(CWD);",
+      "ensureMemoryScaffold();",
+    );
   }
   return next;
 }

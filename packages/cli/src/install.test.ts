@@ -122,4 +122,20 @@ describe("install lifecycle", () => {
     expect(result.ok).toBe(false);
     expect(result.issues.some((i) => i.includes("process-runtime"))).toBe(true);
   });
+
+  it("install/verify/uninstall resolve NanoClaw root from cwd", () => {
+    const prev = process.cwd();
+    process.chdir(root);
+    try {
+      const installed = runInstall();
+      expect(installed.root).toContain("ahp-install-");
+      expect(runVerify().ok).toBe(true);
+      // Missing transform file is skipped during uninstall.
+      rmSync(path.join(root, "container/agent-runner/src/config.ts"));
+      const removed = runUninstall();
+      expect(removed.root).toContain("ahp-install-");
+    } finally {
+      process.chdir(prev);
+    }
+  });
 });

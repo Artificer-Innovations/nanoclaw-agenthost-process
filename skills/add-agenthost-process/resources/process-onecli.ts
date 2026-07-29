@@ -68,9 +68,7 @@ function writeCert(
  * System trust store + OneCLI gateway CA — required for Codex/Rust (SSL_CERT_FILE)
  * and Deno; Node can use NODE_EXTRA_CA_CERTS alone but native CLIs cannot.
  */
-export function buildCombinedCaBundlePem(
-  gatewayCaPem: string,
-): string | null {
+export function buildCombinedCaBundlePem(gatewayCaPem: string): string | null {
   for (const sysPath of SYSTEM_CA_PATHS) {
     try {
       const sysCa = fs.readFileSync(sysPath, "utf8");
@@ -174,9 +172,7 @@ export function rewriteDockerInternalHostnames(
  * at containerPath under /home/node).
  */
 export function materializeCredentialStubs(
-  stubs:
-    | Array<{ containerPath: string; content: string }>
-    | undefined,
+  stubs: Array<{ containerPath: string; content: string }> | undefined,
   opts: { homeDir?: string; codexHome?: string },
 ): void {
   if (!stubs?.length) return;

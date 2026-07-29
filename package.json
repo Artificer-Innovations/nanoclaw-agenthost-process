@@ -39,6 +39,7 @@
     "lint:fix": "prettier --write \"packages/**/*.{ts,json,md}\" \"skills/**/*.md\" \"*.md\" \"scripts/**/*.mjs\"",
     "test:unit": "pnpm -r test:unit",
     "test:coverage": "pnpm --filter @nanoclaw-agenthost-process/cli test:coverage && pnpm --filter @nanoclaw-agenthost-process/host test:coverage",
+    "test:integration": "node scripts/run-integration.mjs",
     "changeset": "changeset",
     "version": "changeset version",
     "release:publish": "npm publish --provenance --access public",

@@ -8,9 +8,11 @@
 ## Workflow
 
 1. Branch from `develop`
-2. `pnpm install && pnpm run test:coverage && pnpm run lint && pnpm run build`
+2. `pnpm install && pnpm run typecheck && pnpm run lint && pnpm run test:coverage && pnpm run build && pnpm run test:integration`
 3. Add a changeset for user-facing changes (`pnpm changeset`)
 4. Open a PR into `develop`
+
+CI enforces 100% unit coverage (CLI + host), skill resource sync drift, and the fixture install → verify → uninstall integration smoke.
 
 ## Package layout
 

@@ -81,4 +81,16 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
     expect(patchWorkingRootConfig(patched)).toBe(patched);
     expect(unpatchWorkingRootConfig(patched)).toBe(source);
   });
+
+  it("throws when CONFIG_PATH anchor missing", () => {
+    expect(() =>
+      patchWorkingRootConfig("const CONFIG_PATH = 'other';\n"),
+    ).toThrow(/anchors moved/);
+  });
+
+  it("unpatch helpers are no-ops without markers", () => {
+    expect(unpatchWorkingRootConfig("x")).toBe("x");
+    expect(unpatchWorkingRootPaths("x")).toBe("x");
+    expect(unpatchWorkingRootCwd("x")).toBe("x");
+  });
 });

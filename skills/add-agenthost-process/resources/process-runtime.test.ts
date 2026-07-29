@@ -203,13 +203,31 @@ describe("process-runtime", () => {
     expect(env.SESSIONIO_AGENT_GROUP_ID).toBeUndefined();
   });
 
-  it("augments PATH so LaunchAgent hosts can find Homebrew tools", () => {
+  it("augments PATH with common host tool dirs that exist", () => {
+    const home = path.join(root, "home");
+    mkdirSync(path.join(home, ".bun/bin"), { recursive: true });
+    mkdirSync(path.join(home, ".local/bin"), { recursive: true });
     const env = buildProcessAgentEnv(
       { id: "sess-1", agent_group_id: "ag-1" },
       "/tmp/sess",
-      { PATH: "/usr/bin:/bin", HOME: process.env.HOME },
+      { PATH: "/usr/bin:/bin", HOME: home },
     );
-    expect(env.PATH).toContain("/opt/homebrew/bin");
+    expect(env.PATH).toContain(path.join(home, ".bun/bin"));
+    expect(env.PATH).toContain(path.join(home, ".local/bin"));
+    // /opt/homebrew/bin is macOS-only; /usr/local/bin is often present on Linux CI.
+    for (const dir of ["/opt/homebrew/bin", "/usr/local/bin"]) {
+      try {
+        if (fs.statSync(dir).isDirectory()) {
+          expect(env.PATH).toContain(dir);
+        }
+      } catch {
+        // absent on this runner
+      }
+    }
+    expect(
+      env.PATH!.endsWith("/usr/bin:/bin") ||
+        env.PATH!.includes(":/usr/bin:/bin"),
+    ).toBe(true);
   });
 
   it("honors NANOCLAW_PROCESS_PATH_PREFIX for tool discovery", () => {

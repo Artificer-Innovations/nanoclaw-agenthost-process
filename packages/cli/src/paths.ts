@@ -72,12 +72,14 @@ export interface CopyRule {
 
 export const HOST_COPY_RULES: CopyRule[] = [
   { source: "process-boot.ts", dest: "src/process-boot.ts" },
+  { source: "process-env.ts", dest: "src/process-env.ts" },
   { source: "process-runtime.ts", dest: "src/process-runtime.ts" },
   { source: "process-onecli.ts", dest: "src/process-onecli.ts" },
 ];
 
 export const HOST_OPTIONAL_COPY_RULES: CopyRule[] = [
   { source: "process-boot.test.ts", dest: "src/process-boot.test.ts" },
+  { source: "process-env.test.ts", dest: "src/process-env.test.ts" },
   { source: "process-runtime.test.ts", dest: "src/process-runtime.test.ts" },
   { source: "process-onecli.test.ts", dest: "src/process-onecli.test.ts" },
   { source: "process-wiring.test.ts", dest: "src/process-wiring.test.ts" },

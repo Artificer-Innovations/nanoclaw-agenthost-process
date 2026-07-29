@@ -48,7 +48,7 @@ Driver name: **`process`**. `requiredTransport` is unset (filesystem mailbox OK)
 
 ## Host opt-in
 
-`NANOCLAW_ALLOW_PROCESS_RUNTIME=1` (or `true` / `yes`) must be set on the host process. Without it, `wake` fails closed even when a group has `runtime=process`.
+`NANOCLAW_ALLOW_PROCESS_RUNTIME=1` (or `true` / `yes`) must be set on the host process — via NanoClaw `.env` (process boot applies it when unset) or LaunchAgent / shell env. Without it, `wake` fails closed even when a group has `runtime=process`.
 
 After `WAKE_FAIL_BLOCK_AFTER` (5) consecutive fail-closed wakes for a session, the driver writes `WORKING_ROOT/.process.wake-blocked` and logs an error.
 

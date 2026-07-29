@@ -394,6 +394,7 @@ export function ensureProcessProviderHomes(
   const codexHome = codexSharedDir(session.agent_group_id);
   fs.mkdirSync(codexHome, { recursive: true });
   ensureCodexApiKeyAuthStub(codexHome);
+  ensureCodexFileCredentialsStore(codexHome);
 
   const claudeHome = claudeSharedDir(session.agent_group_id);
   fs.mkdirSync(claudeHome, { recursive: true });
@@ -437,6 +438,72 @@ export function ensureCodexApiKeyAuthStub(codexHome: string): void {
   }
 
   fs.writeFileSync(authPath, sentinel, { mode: 0o600 });
+}
+
+/**
+ * Keep Codex off the OS keyring. Default stores are keyring/auto — on macOS
+ * LaunchAgent children that probe Security.framework get a Keychain popup
+ * even with an isolated HOME + auth.json apikey stub.
+ */
+export function ensureCodexFileCredentialsStore(codexHome: string): void {
+  const configPath = path.join(codexHome, "config.toml");
+  const desiredKeys: Array<{ key: string; line: string }> = [
+    {
+      key: "cli_auth_credentials_store",
+      line: 'cli_auth_credentials_store = "file"',
+    },
+    {
+      key: "mcp_oauth_credentials_store",
+      line: 'mcp_oauth_credentials_store = "file"',
+    },
+  ];
+
+  let existing = "";
+  try {
+    existing = fs.readFileSync(configPath, "utf8");
+  } catch {
+    fs.writeFileSync(
+      configPath,
+      `${desiredKeys.map((k) => k.line).join("\n")}\n`,
+      { mode: 0o600 },
+    );
+    return;
+  }
+
+  let next = existing;
+  const missing: string[] = [];
+  for (const { key, line } of desiredKeys) {
+    const re = new RegExp(`^\\s*${key}\\s*=\\s*.*$`, "m");
+    if (re.test(next)) {
+      next = next.replace(re, line);
+    } else {
+      missing.push(line);
+    }
+  }
+
+  // Disable keyring-backed age secrets key when a [features] table exists.
+  if (/^\s*\[features\]\s*$/m.test(next)) {
+    if (/^\s*secret_auth_storage\s*=/m.test(next)) {
+      next = next.replace(
+        /^\s*secret_auth_storage\s*=\s*.*$/m,
+        "secret_auth_storage = false",
+      );
+    } else {
+      next = next.replace(
+        /^(\s*\[features\]\s*)$/m,
+        `$1\nsecret_auth_storage = false`,
+      );
+    }
+  }
+
+  if (missing.length) {
+    const trimmed = next.trimEnd();
+    next = `${trimmed ? `${trimmed}\n` : ""}${missing.join("\n")}\n`;
+  } else if (!next.endsWith("\n")) {
+    next = `${next}\n`;
+  }
+
+  if (next !== existing) fs.writeFileSync(configPath, next, { mode: 0o600 });
 }
 
 export function ensureAgentSymlink(

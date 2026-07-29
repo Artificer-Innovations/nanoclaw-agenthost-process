@@ -12,6 +12,7 @@ export default defineConfig({
     alias: {
       "./agenthosts.js": path.join(fixtures, "agenthosts.ts"),
       "./log.js": path.join(fixtures, "log.ts"),
+      "./env.js": path.join(fixtures, "env.ts"),
       "./config.js": path.join(fixtures, "config.ts"),
       "./session-manager.js": path.join(fixtures, "session-manager.ts"),
       "./db/agent-groups.js": path.join(fixtures, "db/agent-groups.ts"),

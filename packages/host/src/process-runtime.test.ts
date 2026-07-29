@@ -77,6 +77,7 @@ import {
   cleanupProcessOrphans,
   ensureAgentSymlink,
   ensureCodexApiKeyAuthStub,
+  ensureCodexFileCredentialsStore,
   ensureProcessProviderHomes,
   isPidAlive,
   isProcessRunning,
@@ -433,6 +434,12 @@ describe("process-runtime", () => {
     expect(
       readFileSync(path.join(homes.codexHome, "auth.json"), "utf8"),
     ).toContain('"auth_mode": "apikey"');
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain('cli_auth_credentials_store = "file"');
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain('mcp_oauth_credentials_store = "file"');
 
     // Idempotent when symlinks already point at the shared dirs.
     ensureProcessProviderHomes(
@@ -459,6 +466,83 @@ describe("process-runtime", () => {
     expect(
       readFileSync(path.join(homes.codexHome, "auth.json"), "utf8"),
     ).toContain("placeholder");
+
+    // Force file-backed credentials store (replaces keyring/auto).
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      [
+        'cli_auth_credentials_store = "keyring"',
+        'mcp_oauth_credentials_store = "keyring"',
+        "[features]",
+        "memories = false",
+        'sandbox_mode = "danger-full-access"',
+        "",
+      ].join("\n"),
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    const afterReplace = readFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      "utf8",
+    );
+    expect(afterReplace).toContain('cli_auth_credentials_store = "file"');
+    expect(afterReplace).toContain('mcp_oauth_credentials_store = "file"');
+    expect(afterReplace).toContain("secret_auth_storage = false");
+    expect(afterReplace).toContain('sandbox_mode = "danger-full-access"');
+
+    // Replace an existing secret_auth_storage = true under [features].
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      [
+        'cli_auth_credentials_store = "file"',
+        'mcp_oauth_credentials_store = "file"',
+        "[features]",
+        "secret_auth_storage = true",
+        "memories = false",
+        "",
+      ].join("\n"),
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain("secret_auth_storage = false");
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).not.toContain("secret_auth_storage = true");
+
+    // Already-correct file without trailing newline still normalizes.
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      'cli_auth_credentials_store = "file"\nmcp_oauth_credentials_store = "file"',
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8").endsWith(
+        "\n",
+      ),
+    ).toBe(true);
+
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      'sandbox_mode = "danger-full-access"\n',
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toMatch(/cli_auth_credentials_store = "file"/);
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toMatch(/mcp_oauth_credentials_store = "file"/);
+
+    // Idempotent when already file; empty config still gets the keys.
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    writeFileSync(path.join(homes.codexHome, "config.toml"), "");
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain('cli_auth_credentials_store = "file"');
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain('mcp_oauth_credentials_store = "file"');
 
     // Replace wrong symlink / non-symlink under synthetic HOME.
     rmSync(path.join(homes.home, ".claude"), { force: true });

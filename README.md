@@ -27,10 +27,12 @@ Prefer Docker (or another sandboxed runtime) for untrusted channel content. Use 
 
 Enabling process mode requires **two** deliberate steps so a typo on `--runtime` alone cannot unsandbox an agent:
 
-1. Host env: `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` (LaunchAgent / shell profile / `.env`)
+1. Host opt-in: `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` in the NanoClaw `.env` (preferred) or LaunchAgent / shell env. Process boot copies this key from `.env` into `process.env` when unset — same pattern as `SESSIONIO_*`.
 2. Per-group: `ncl groups config update --id <id> --runtime process`
 
 Wakes fail closed until the allow env is set. After repeated fail-closed wakes the driver writes `.process.wake-blocked` under the session dir and logs an error so misconfiguration is visible.
+
+Note: this gate is **host-only** (not forwarded as a requirement for agent runners). Put it in `.env` so LaunchAgent plists do not need a separate copy.
 
 ## Dependency
 
@@ -48,12 +50,13 @@ pnpm run build && ./container/build.sh
 pnpm exec nanoclaw-agenthost-process verify
 ```
 
-Host opt-in (required):
+Host opt-in (required) — add to NanoClaw `.env`, then restart the host:
 
 ```bash
-export NANOCLAW_ALLOW_PROCESS_RUNTIME=1
-# then restart the NanoClaw host / LaunchAgent
+NANOCLAW_ALLOW_PROCESS_RUNTIME=1
 ```
+
+(Or export it in the LaunchAgent / shell environment; `.env` is enough because process boot applies it when unset.)
 
 Opt in a group:
 

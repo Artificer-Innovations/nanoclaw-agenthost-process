@@ -444,6 +444,12 @@ export function ensureCodexApiKeyAuthStub(codexHome: string): void {
  * Keep Codex off the OS keyring. Default stores are keyring/auto — on macOS
  * LaunchAgent children that probe Security.framework get a Keychain popup
  * even with an isolated HOME + auth.json apikey stub.
+ *
+ * Always forces:
+ *   cli_auth_credentials_store = "file"
+ *   mcp_oauth_credentials_store = "file"
+ *   [features] secret_auth_storage = false
+ * including brand-new config.toml (no pre-existing [features] table).
  */
 export function ensureCodexFileCredentialsStore(codexHome: string): void {
   const configPath = path.join(codexHome, "config.toml");
@@ -457,16 +463,13 @@ export function ensureCodexFileCredentialsStore(codexHome: string): void {
       line: 'mcp_oauth_credentials_store = "file"',
     },
   ];
+  const freshFile = `${desiredKeys.map((k) => k.line).join("\n")}\n\n[features]\nsecret_auth_storage = false\n`;
 
   let existing = "";
   try {
     existing = fs.readFileSync(configPath, "utf8");
   } catch {
-    fs.writeFileSync(
-      configPath,
-      `${desiredKeys.map((k) => k.line).join("\n")}\n`,
-      { mode: 0o600 },
-    );
+    fs.writeFileSync(configPath, freshFile, { mode: 0o600 });
     return;
   }
 
@@ -481,20 +484,7 @@ export function ensureCodexFileCredentialsStore(codexHome: string): void {
     }
   }
 
-  // Disable keyring-backed age secrets key when a [features] table exists.
-  if (/^\s*\[features\]\s*$/m.test(next)) {
-    if (/^\s*secret_auth_storage\s*=/m.test(next)) {
-      next = next.replace(
-        /^\s*secret_auth_storage\s*=\s*.*$/m,
-        "secret_auth_storage = false",
-      );
-    } else {
-      next = next.replace(
-        /^(\s*\[features\]\s*)$/m,
-        `$1\nsecret_auth_storage = false`,
-      );
-    }
-  }
+  next = ensureSecretAuthStorageDisabled(next);
 
   if (missing.length) {
     next = insertTomlTopLevelLines(next, missing);
@@ -503,6 +493,25 @@ export function ensureCodexFileCredentialsStore(codexHome: string): void {
   }
 
   if (next !== existing) fs.writeFileSync(configPath, next, { mode: 0o600 });
+}
+
+/** Ensure `[features] secret_auth_storage = false` exists (create table if needed). */
+export function ensureSecretAuthStorageDisabled(content: string): string {
+  if (/^\s*\[features\]\s*$/m.test(content)) {
+    if (/^\s*secret_auth_storage\s*=/m.test(content)) {
+      return content.replace(
+        /^\s*secret_auth_storage\s*=\s*.*$/m,
+        "secret_auth_storage = false",
+      );
+    }
+    return content.replace(
+      /^(\s*\[features\]\s*)$/m,
+      `$1\nsecret_auth_storage = false`,
+    );
+  }
+  const trimmed = content.trimEnd();
+  const block = "[features]\nsecret_auth_storage = false\n";
+  return `${trimmed ? `${trimmed}\n\n` : ""}${block}`;
 }
 
 /** Insert top-level TOML keys before the first table header (not at EOF). */

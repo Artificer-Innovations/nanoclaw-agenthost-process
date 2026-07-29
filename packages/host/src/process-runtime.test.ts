@@ -79,6 +79,7 @@ import {
   ensureCodexApiKeyAuthStub,
   ensureCodexFileCredentialsStore,
   ensureProcessProviderHomes,
+  ensureSecretAuthStorageDisabled,
   insertTomlTopLevelLines,
   isPidAlive,
   isProcessRunning,
@@ -118,6 +119,7 @@ function makeChild(pid: number | undefined): EventEmitter & {
 describe("process-runtime", () => {
   it("insertTomlTopLevelLines covers empty, table-at-start, and no-table paths", () => {
     expect(insertTomlTopLevelLines("x = 1\n", [])).toBe("x = 1\n");
+    expect(insertTomlTopLevelLines("", ["a = 1"])).toBe("a = 1\n");
     expect(insertTomlTopLevelLines("[features]\nok = true\n", ["a = 1"])).toBe(
       "a = 1\n[features]\nok = true\n",
     );
@@ -127,6 +129,23 @@ describe("process-runtime", () => {
     expect(insertTomlTopLevelLines("x = 1\n", ["a = 1", "b = 2"])).toBe(
       "x = 1\na = 1\nb = 2\n",
     );
+  });
+
+  it("ensureSecretAuthStorageDisabled creates or updates [features]", () => {
+    expect(ensureSecretAuthStorageDisabled("")).toBe(
+      "[features]\nsecret_auth_storage = false\n",
+    );
+    expect(ensureSecretAuthStorageDisabled("x = 1\n")).toBe(
+      "x = 1\n\n[features]\nsecret_auth_storage = false\n",
+    );
+    expect(
+      ensureSecretAuthStorageDisabled(
+        "[features]\nsecret_auth_storage = true\n",
+      ),
+    ).toContain("secret_auth_storage = false");
+    expect(
+      ensureSecretAuthStorageDisabled("[features]\nmemories = false\n"),
+    ).toMatch(/\[features\]\nsecret_auth_storage = false/);
   });
   let root: string;
   let sessionDir: string;
@@ -453,6 +472,12 @@ describe("process-runtime", () => {
     expect(
       readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
     ).toContain('mcp_oauth_credentials_store = "file"');
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain("secret_auth_storage = false");
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain("[features]");
 
     // Idempotent when symlinks already point at the shared dirs.
     ensureProcessProviderHomes(
@@ -525,7 +550,7 @@ describe("process-runtime", () => {
     // Already-correct file without trailing newline still normalizes.
     writeFileSync(
       path.join(homes.codexHome, "config.toml"),
-      'cli_auth_credentials_store = "file"\nmcp_oauth_credentials_store = "file"',
+      'cli_auth_credentials_store = "file"\nmcp_oauth_credentials_store = "file"\n\n[features]\nsecret_auth_storage = false',
     );
     ensureCodexFileCredentialsStore(homes.codexHome);
     expect(
@@ -563,8 +588,11 @@ describe("process-runtime", () => {
     expect(
       readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
     ).toMatch(/mcp_oauth_credentials_store = "file"/);
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain("secret_auth_storage = false");
 
-    // Idempotent when already file; empty config still gets the keys.
+    // Idempotent when already file; empty config still gets the keys + features.
     ensureCodexFileCredentialsStore(homes.codexHome);
     writeFileSync(path.join(homes.codexHome, "config.toml"), "");
     ensureCodexFileCredentialsStore(homes.codexHome);
@@ -574,6 +602,9 @@ describe("process-runtime", () => {
     expect(
       readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
     ).toContain('mcp_oauth_credentials_store = "file"');
+    expect(
+      readFileSync(path.join(homes.codexHome, "config.toml"), "utf8"),
+    ).toContain("secret_auth_storage = false");
 
     // Replace wrong symlink / non-symlink under synthetic HOME.
     rmSync(path.join(homes.home, ".claude"), { force: true });

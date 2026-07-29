@@ -79,6 +79,7 @@ import {
   ensureCodexApiKeyAuthStub,
   ensureCodexFileCredentialsStore,
   ensureProcessProviderHomes,
+  insertTomlTopLevelLines,
   isPidAlive,
   isProcessRunning,
   isProcessRuntimeAllowed,
@@ -115,6 +116,18 @@ function makeChild(pid: number | undefined): EventEmitter & {
 }
 
 describe("process-runtime", () => {
+  it("insertTomlTopLevelLines covers empty, table-at-start, and no-table paths", () => {
+    expect(insertTomlTopLevelLines("x = 1\n", [])).toBe("x = 1\n");
+    expect(insertTomlTopLevelLines("[features]\nok = true\n", ["a = 1"])).toBe(
+      "a = 1\n[features]\nok = true\n",
+    );
+    expect(
+      insertTomlTopLevelLines("x = 1\n[features]\nok = true\n", ["a = 1"]),
+    ).toBe("x = 1\na = 1\n[features]\nok = true\n");
+    expect(insertTomlTopLevelLines("x = 1\n", ["a = 1", "b = 2"])).toBe(
+      "x = 1\na = 1\nb = 2\n",
+    );
+  });
   let root: string;
   let sessionDir: string;
   let groupDir: string;

@@ -58,20 +58,54 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
   });
 
   it("patches and unpatches CWD + memory scaffold", () => {
-    const source = `const CWD = '/workspace/agent';\nensureMemoryScaffold();\n`;
+    const source = `const CWD = '/workspace/agent';\nensureMemoryScaffold();\nensureMemoryScaffold();\n`;
     const patched = patchWorkingRootCwd(source);
     expect(patched).toContain("WORKING_ROOT");
-    expect(patched).toContain("ensureMemoryScaffold(CWD);");
+    expect(patched).toContain("pre-patch-cwd:");
+    expect(patched).not.toContain("ensureMemoryScaffold();");
+    expect(patched.match(/ensureMemoryScaffold\(CWD\);/g)?.length).toBe(2);
     expect(unpatchWorkingRootCwd(patched)).toContain(
       "const CWD = '/workspace/agent';",
     );
     expect(unpatchWorkingRootCwd(patched)).toContain("ensureMemoryScaffold();");
+    expect(unpatchWorkingRootCwd(patched)).not.toContain(
+      "ensureMemoryScaffold(CWD)",
+    );
+  });
+
+  it("unpatches CWD to Docker default when pre-patch marker is missing", () => {
+    const withoutMarker = `${`// ${"@nanoclaw-agenthost-process"}:working-root-cwd:begin`}
+const CWD = process.env.WORKING_ROOT
+  ? \`\${process.env.WORKING_ROOT}/agent\`
+  : '/workspace/agent';
+${`// ${"@nanoclaw-agenthost-process"}:working-root-cwd:end`}
+ensureMemoryScaffold(CWD);
+`;
+    expect(unpatchWorkingRootCwd(withoutMarker)).toContain(
+      "const CWD = '/workspace/agent';",
+    );
   });
 
   it("throws when CWD anchor missing", () => {
     expect(() => patchWorkingRootCwd('const CWD = "other";\n')).toThrow(
       /anchors moved/,
     );
+  });
+
+  it("patches remaining scaffold calls when CWD block already present", () => {
+    const begin = `// ${"@nanoclaw-agenthost-process"}:working-root-cwd:begin`;
+    const end = `// ${"@nanoclaw-agenthost-process"}:working-root-cwd:end`;
+    const source = `${begin}
+// @nanoclaw-agenthost-process:pre-patch-cwd: const CWD = '/workspace/agent';
+const CWD = process.env.WORKING_ROOT
+  ? \`\${process.env.WORKING_ROOT}/agent\`
+  : '/workspace/agent';
+${end}
+ensureMemoryScaffold();
+`;
+    const patched = patchWorkingRootCwd(source);
+    expect(patched).toContain("ensureMemoryScaffold(CWD);");
+    expect(patched).not.toContain("ensureMemoryScaffold();");
   });
 
   it("patches and unpatches CONFIG_PATH", () => {

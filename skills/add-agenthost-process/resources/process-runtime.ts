@@ -34,7 +34,50 @@ interface TrackedChild {
   process: ChildProcess | null;
   pid: number;
   sessionDir: string;
+  markStopped?: () => void;
+  /** Set by killTracked so wake does not treat an in-flight kill as "already running". */
+  killing?: boolean;
 }
+
+/** Host env keys safe to forward into the untrusted agent process (opt-in). */
+const ALLOWED_HOST_ENV_KEYS = new Set([
+  "PATH",
+  "TERM",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "COLORTERM",
+  "FORCE_COLOR",
+  "NO_COLOR",
+  "USER",
+  "LOGNAME",
+  "NO_PROXY",
+  "no_proxy",
+]);
+
+const ALLOWED_HOST_ENV_PREFIXES = ["SESSIONIO_", "NANOCLAW_"];
+
+/** Keys that may be overlaid from OneCLI / driver additions (never taken from host alone). */
+const AGENT_SCOPED_ENV_KEYS = new Set([
+  "HOME",
+  "CODEX_HOME",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "ALL_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "DENO_CERT",
+  "NODE_USE_ENV_PROXY",
+]);
 
 export interface ResolvedWakePaths {
   sessionDir: string;
@@ -88,44 +131,86 @@ export function rewriteSessionioBaseUrlForHost(url: string): string {
 }
 
 /**
- * Env for the spawned agent-runner. Mirrors container-runner sessionio injection
- * and always sets WORKING_ROOT to the host session directory.
- *
- * `pathHome` defaults to the operator `process.env.HOME` so PATH augmentation
- * still finds ~/.bun and ~/.local even when the child HOME is synthetic.
+ * Env for the spawned agent-runner. Starts from an **allowlist** of host vars
+ * (not a full `process.env` spread) so operator secrets / SSH agent sockets /
+ * host OneCLI keys do not ride into the untrusted child. OneCLI proxy/CA vars
+ * and synthetic HOME come from `opts.additions`.
  */
 export function buildProcessAgentEnv(
   session: SessionRef,
   sessionDirectory: string,
-  base: NodeJS.ProcessEnv = process.env,
-  opts?: { pathHome?: string },
+  hostEnv: NodeJS.ProcessEnv = process.env,
+  opts?: { pathHome?: string; additions?: NodeJS.ProcessEnv },
 ): NodeJS.ProcessEnv {
   const pathHome = opts?.pathHome ?? process.env.HOME;
   const env: NodeJS.ProcessEnv = {
-    ...base,
+    ...pickAllowedHostEnv(hostEnv),
     WORKING_ROOT: sessionDirectory,
-    PATH: augmentHostToolPath(base.PATH, pathHome),
   };
 
-  const transport = (base.SESSIONIO_TRANSPORT ?? "").trim().toLowerCase();
+  const additions = opts?.additions ?? {};
+  for (const [key, value] of Object.entries(additions)) {
+    if (typeof value !== "string") continue;
+    // Never forward host OneCLI credentials into the agent process.
+    if (key.startsWith("ONECLI_")) continue;
+    if (
+      AGENT_SCOPED_ENV_KEYS.has(key) ||
+      key.startsWith("SESSIONIO_") ||
+      key.startsWith("NANOCLAW_")
+    ) {
+      env[key] = value;
+    }
+  }
+
+  env.PATH = augmentHostToolPath(
+    typeof additions.PATH === "string" ? additions.PATH : env.PATH,
+    pathHome,
+  );
+
+  const transport = (env.SESSIONIO_TRANSPORT ?? "").trim().toLowerCase();
   if (transport === "http" || transport === "loopback") {
-    env.SESSIONIO_TRANSPORT = base.SESSIONIO_TRANSPORT;
-    if (base.SESSIONIO_HTTP_TOKEN) {
-      env.SESSIONIO_HTTP_TOKEN = base.SESSIONIO_HTTP_TOKEN;
-    }
-    if (base.SESSIONIO_BASE_URL) {
-      env.SESSIONIO_BASE_URL = rewriteSessionioBaseUrlForHost(
-        base.SESSIONIO_BASE_URL,
-      );
-    }
     env.SESSIONIO_SESSION_ID = session.id;
     env.SESSIONIO_AGENT_GROUP_ID = session.agent_group_id;
+    if (env.SESSIONIO_BASE_URL) {
+      env.SESSIONIO_BASE_URL = rewriteSessionioBaseUrlForHost(
+        env.SESSIONIO_BASE_URL,
+      );
+    }
     const noProxyExtra = "127.0.0.1,localhost,host.docker.internal";
     env.NO_PROXY = mergeNoProxy(env.NO_PROXY, noProxyExtra);
     env.no_proxy = mergeNoProxy(env.no_proxy, noProxyExtra);
   }
 
   return env;
+}
+
+/** Pick only explicitly allowlisted host env keys (opt-in, not opt-out). */
+export function pickAllowedHostEnv(
+  hostEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(hostEnv)) {
+    if (typeof value !== "string") continue;
+    if (key.startsWith("ONECLI_")) continue;
+    if (
+      ALLOWED_HOST_ENV_KEYS.has(key) ||
+      ALLOWED_HOST_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/** Redact proxy credentials / common secrets before agent stderr hits host logs. */
+export function scrubAgentLogLine(line: string): string {
+  return line
+    .replace(/(\w+:\/\/)[^/@\s]+:[^/@\s]+@/g, "$1***:***@")
+    .replace(/(Bearer\s+)[A-Za-z0-9._\-]+/gi, "$1***")
+    .replace(
+      /\b(ONECLI_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|SESSIONIO_HTTP_TOKEN|HTTPS_PROXY|HTTP_PROXY|https_proxy|http_proxy|ALL_PROXY|all_proxy)\s*[=:]\s*\S+/gi,
+      "$1=***",
+    );
 }
 
 /**
@@ -451,6 +536,7 @@ function adoptExistingPid(
   session: SessionRef,
   sessionDirectory: string,
   markRunning: () => void,
+  markStopped: () => void,
 ): boolean {
   const existingPid = readPidFile(sessionDirectory);
   if (existingPid == null) return false;
@@ -471,10 +557,18 @@ function adoptExistingPid(
     process: null,
     pid: existingPid,
     sessionDir: sessionDirectory,
+    markStopped,
   });
   markRunning();
   clearWakeFailure(session.id, sessionDirectory);
   return true;
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  while (isPidAlive(pid) && Date.now() - started < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
 }
 
 export function writePidFile(sessionDirPath: string, pid: number): void {
@@ -502,11 +596,31 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-function terminatePid(pid: number, signal: NodeJS.Signals): void {
+/**
+ * Signal a tracked agent pid (and its process group when detached).
+ *
+ * PID-reuse caveat (accepted for PoC): between isPidAlive and kill, the OS may
+ * recycle the pid. We do not fingerprint start-time/comm; Docker avoids this via
+ * container handles. Prefer process-group kill so grandchildren die with us.
+ */
+function terminatePid(
+  pid: number,
+  signal: NodeJS.Signals,
+  processGroup = true,
+): void {
   try {
+    if (processGroup && process.platform !== "win32") {
+      // Negative pid = process group (spawned with detached:true).
+      process.kill(-pid, signal);
+      return;
+    }
     process.kill(pid, signal);
   } catch {
-    // already gone
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // already gone
+    }
   }
 }
 
@@ -521,6 +635,7 @@ export function killTracked(
     return;
   }
 
+  entry.killing = true;
   log.info("Killing process agent", { sessionId, reason, pid: entry.pid });
 
   if (onExit) {
@@ -560,9 +675,10 @@ function forgetChild(
   sessionDirPath: string,
   markStopped?: () => void,
 ): void {
+  const entry = activeChildren.get(sessionId);
   activeChildren.delete(sessionId);
   clearPidFile(sessionDirPath);
-  markStopped?.();
+  (markStopped ?? entry?.markStopped)?.();
 }
 
 export async function wakeProcess(
@@ -579,8 +695,19 @@ export async function wakeProcess(
   }
 
   if (activeChildren.has(session.id)) {
-    log.debug("Process agent already running", { sessionId: session.id });
-    return true;
+    const existing = activeChildren.get(session.id)!;
+    if (existing.killing) {
+      // Kill in flight — do not treat as healthy running; wait briefly then re-wake.
+      log.debug("Process agent kill in flight — waiting before re-wake", {
+        sessionId: session.id,
+        pid: existing.pid,
+      });
+      await waitForPidExit(existing.pid, KILL_GRACE_MS + 500);
+      forgetChild(session.id, existing.sessionDir, existing.markStopped);
+    } else {
+      log.debug("Process agent already running", { sessionId: session.id });
+      return true;
+    }
   }
 
   const resolved = resolveWakePaths(session, ctx);
@@ -602,7 +729,7 @@ export async function wakeProcess(
     markStopped,
   } = resolved;
 
-  if (adoptExistingPid(session, sessionDirectory, markRunning)) {
+  if (adoptExistingPid(session, sessionDirectory, markRunning, markStopped)) {
     return true;
   }
 
@@ -642,26 +769,24 @@ export async function wakeProcess(
       return false;
     }
 
-    // PATH augment uses operator HOME; child HOME is set after so Codex/Claude
-    // stay on the synthetic provider homes instead of the operator keychain.
-    const env = buildProcessAgentEnv(
-      session,
-      sessionDirectory,
-      {
-        ...process.env,
+    // Allowlisted host env + OneCLI additions + synthetic provider homes.
+    // Does NOT spread full process.env (host OneCLI keys / SSH agent stay out).
+    const env = buildProcessAgentEnv(session, sessionDirectory, process.env, {
+      pathHome: process.env.HOME,
+      additions: {
         ...extraEnv,
         ...onecli.env,
         HOME: homes.home,
         CODEX_HOME: homes.codexHome,
       },
-      { pathHome: process.env.HOME },
-    );
+    });
 
     const child = spawn(bunBinary, ["run", agentRunnerEntry], {
       cwd: groupDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
+      // Own process group so kill(-pid) reaches grandchildren (tmux, browsers).
+      detached: process.platform !== "win32",
     });
 
     if (child.pid == null) {
@@ -677,6 +802,7 @@ export async function wakeProcess(
       process: child,
       pid: child.pid,
       sessionDir: sessionDirectory,
+      markStopped,
     });
     markRunning();
     clearWakeFailure(session.id, sessionDirectory);
@@ -685,8 +811,9 @@ export async function wakeProcess(
     child.stderr?.on("data", (data: Buffer) => {
       for (const line of data.toString().trim().split("\n")) {
         if (!line) continue;
-        log.debug(line, { processAgent: session.agent_group_id });
-        stderrTail.push(line);
+        const scrubbed = scrubAgentLogLine(line);
+        log.debug(scrubbed, { processAgent: session.agent_group_id });
+        stderrTail.push(scrubbed);
         if (stderrTail.length > 10) stderrTail.shift();
       }
     });
@@ -729,7 +856,9 @@ export async function wakeProcess(
 export function isProcessRunning(sessionId: string): boolean {
   const entry = activeChildren.get(sessionId);
   if (!entry) return false;
+  if (entry.killing) return false;
   if (!isPidAlive(entry.pid)) {
+    // markStopped is stored on the tracked entry (forgetChild falls back to it).
     forgetChild(sessionId, entry.sessionDir);
     return false;
   }

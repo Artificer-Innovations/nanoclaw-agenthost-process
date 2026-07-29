@@ -82,12 +82,14 @@ import {
   isProcessRunning,
   isProcessRuntimeAllowed,
   killTracked,
+  pickAllowedHostEnv,
   pidFilePath,
   processDriver,
   readPidFile,
   resetProcessDriverStateForTests,
   resolveWakePaths,
   rewriteSessionioBaseUrlForHost,
+  scrubAgentLogLine,
   wakeBlockedPath,
   wakeProcess,
   writePidFile,
@@ -206,9 +208,69 @@ describe("process-runtime", () => {
       "/tmp/sess",
       { SESSIONIO_TRANSPORT: "filesystem", SESSIONIO_HTTP_TOKEN: "tok" },
     );
-    // Token may remain from the host env spread; session/group ids are process-only.
+    // Token remains from allowlisted SESSIONIO_* host env; session/group ids are process-only.
     expect(env.SESSIONIO_SESSION_ID).toBeUndefined();
     expect(env.SESSIONIO_AGENT_GROUP_ID).toBeUndefined();
+  });
+
+  it("allowlists host env and never forwards ONECLI_* or SSH_AUTH_SOCK", () => {
+    const env = buildProcessAgentEnv(
+      { id: "sess-1", agent_group_id: "ag-1" },
+      "/tmp/sess",
+      {
+        PATH: "/usr/bin",
+        TERM: "xterm",
+        ONECLI_API_KEY: "host-secret",
+        SSH_AUTH_SOCK: "/tmp/ssh.sock",
+        AWS_SECRET_ACCESS_KEY: "aws",
+        SESSIONIO_HTTP_TOKEN: "tok",
+        NANOCLAW_ALLOW_PROCESS_RUNTIME: "1",
+      },
+      {
+        additions: {
+          HOME: "/tmp/agent-home",
+          PATH: "/custom/bin:/usr/bin",
+          HTTPS_PROXY: "http://u:p@127.0.0.1:9",
+          ONECLI_API_KEY: "should-not-pass",
+          SESSIONIO_BASE_URL: "http://127.0.0.1:9",
+          NANOCLAW_PROCESS_PATH_PREFIX: "/opt/extra",
+          SKIP_ME: "no",
+          // non-string values are ignored
+          BAD: 1 as unknown as string,
+        },
+      },
+    );
+    expect(env.PATH).toContain("/custom/bin");
+    expect(env.TERM).toBe("xterm");
+    expect(env.SESSIONIO_HTTP_TOKEN).toBe("tok");
+    expect(env.SESSIONIO_BASE_URL).toBe("http://127.0.0.1:9");
+    expect(env.NANOCLAW_ALLOW_PROCESS_RUNTIME).toBe("1");
+    expect(env.NANOCLAW_PROCESS_PATH_PREFIX).toBe("/opt/extra");
+    expect(env.HOME).toBe("/tmp/agent-home");
+    expect(env.HTTPS_PROXY).toBe("http://u:p@127.0.0.1:9");
+    expect(env.ONECLI_API_KEY).toBeUndefined();
+    expect(env.SSH_AUTH_SOCK).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(env.SKIP_ME).toBeUndefined();
+    expect(pickAllowedHostEnv({ ONECLI_URL: "x", PATH: "/bin" })).toEqual({
+      PATH: "/bin",
+    });
+    expect(
+      pickAllowedHostEnv({ PATH: undefined, TERM: "x" } as NodeJS.ProcessEnv),
+    ).toEqual({ TERM: "x" });
+  });
+
+  it("scrubs proxy credentials and token-shaped substrings from log lines", () => {
+    expect(
+      scrubAgentLogLine("proxy http://user:secret@127.0.0.1:8080 failed"),
+    ).toContain("http://***:***@127.0.0.1:8080");
+    expect(scrubAgentLogLine("Authorization: Bearer abc.def-ghi")).toContain(
+      "Bearer ***",
+    );
+    expect(scrubAgentLogLine("HTTPS_PROXY=http://x")).toContain("HTTPS_PROXY=***");
+    expect(scrubAgentLogLine("ONECLI_API_KEY=supersecret")).toContain(
+      "ONECLI_API_KEY=***",
+    );
   });
 
   it("augments PATH with common host tool dirs that exist", () => {
@@ -446,6 +508,8 @@ describe("process-runtime", () => {
       path.join(sessionDir, ".process-runtime", "home"),
     );
     expect(opts.env.CODEX_HOME).toContain(path.join(".codex-shared"));
+    expect(opts.detached).toBe(process.platform !== "win32");
+    expect(opts.env.ONECLI_API_KEY).toBeUndefined();
     expect(existsSync(path.join(opts.env.CODEX_HOME!, "auth.json"))).toBe(true);
     expect(
       readFileSync(path.join(opts.env.CODEX_HOME!, "auth.json"), "utf8"),
@@ -532,7 +596,7 @@ describe("process-runtime", () => {
     expect(ok).toBe(false);
   });
 
-  it("wakeProcess logs stderr and non-zero exit", async () => {
+  it("wakeProcess logs scrubbed stderr and non-zero exit", async () => {
     const child = makeChild(process.pid);
     spawnMock.mockReturnValue(child);
     await wakeProcess(
@@ -549,10 +613,19 @@ describe("process-runtime", () => {
     const lines = Array.from({ length: 12 }, (_, i) => `err-line-${i}`).join(
       "\n",
     );
-    child.stderr.emit("data", Buffer.from(`${lines}\n\nextra-after-blank\n`));
+    child.stderr.emit(
+      "data",
+      Buffer.from(
+        `${lines}\n\nextra-after-blank\nHTTPS_PROXY=http://u:p@127.0.0.1:9\n`,
+      ),
+    );
     child.stdout.emit("data", Buffer.from("out"));
     child.emit("close", 1);
     expect(log.warn).toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith(
+      expect.stringContaining("HTTPS_PROXY=***"),
+      expect.any(Object),
+    );
     expect(isProcessRunning("sess-1")).toBe(false);
   });
 
@@ -615,11 +688,87 @@ describe("process-runtime", () => {
     const onExit = vi.fn();
     killTracked("sess-1", "idle", onExit, 5);
     await new Promise((r) => setTimeout(r, 20));
-    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGKILL");
+    const termPid =
+      process.platform === "win32" ? process.pid : -process.pid;
+    expect(killSpy).toHaveBeenCalledWith(termPid, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(termPid, "SIGKILL");
+    expect(isProcessRunning("sess-1")).toBe(false);
     child.emit("close", 0);
     expect(onExit).toHaveBeenCalled();
     killSpy.mockRestore();
+  });
+
+  it("wakeProcess waits out an in-flight kill before re-spawning", async () => {
+    const first = makeChild(111_222);
+    spawnMock.mockReturnValueOnce(first);
+    await wakeProcess(
+      { id: "sess-killwake", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    let alive = true;
+    let signalCount = 0;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
+      if (Math.abs(pid) !== 111_222) return true;
+      if (signal === 0 || signal === undefined) {
+        if (!alive) {
+          throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+        }
+        return true;
+      }
+      signalCount += 1;
+      // Stay alive for one isPidAlive poll so waitForPidExit's loop body runs.
+      if (signalCount >= 2) alive = false;
+      return true;
+    }) as typeof process.kill);
+    killTracked("sess-killwake", "replace", undefined, 5);
+    expect(isProcessRunning("sess-killwake")).toBe(false);
+
+    const second = makeChild(333_444);
+    spawnMock.mockReturnValueOnce(second);
+    const ok = await wakeProcess(
+      { id: "sess-killwake", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    expect(ok).toBe(true);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    killSpy.mockRestore();
+  });
+
+  it("isProcessRunning uses stored markStopped when self-healing", async () => {
+    const child = makeChild(2_147_483_646);
+    spawnMock.mockReturnValue(child);
+    const markStopped = vi.fn();
+    await wakeProcess(
+      { id: "sess-heal", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        bunBinary: "bun",
+        markStopped,
+      },
+    );
+    // Drop the pid so the next poll self-heals via entry.markStopped.
+    child.pid = 2_147_483_646;
+    expect(isProcessRunning("sess-heal")).toBe(false);
+    expect(markStopped).toHaveBeenCalled();
   });
 
   it("killTracked is a no-op when not running", () => {
@@ -647,9 +796,63 @@ describe("process-runtime", () => {
     killSpy.mockRestore();
   });
 
-  it("isProcessRunning forgets dead tracked pids", async () => {
+  it("terminatePid falls back to direct pid when process-group kill fails", async () => {
+    const child = makeChild(777_888);
+    spawnMock.mockReturnValue(child);
+    await wakeProcess(
+      { id: "sess-pg", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        bunBinary: "bun",
+      },
+    );
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
+      if (pid === -777_888) {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      if (pid === 777_888 && (signal === 0 || signal === undefined)) return true;
+      return true;
+    }) as typeof process.kill);
+    expect(() => killTracked("sess-pg", "pg-fallback", undefined, 1)).not.toThrow();
+    expect(killSpy).toHaveBeenCalledWith(-777_888, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(777_888, "SIGTERM");
+    killSpy.mockRestore();
+  });
+
+  it("terminatePid uses direct pid signaling on win32", async () => {
+    const child = makeChild(666_555);
+    spawnMock.mockReturnValue(child);
+    await wakeProcess(
+      { id: "sess-win", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        bunBinary: "bun",
+      },
+    );
+    const platformDesc = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      killTracked("sess-win", "win", undefined, 1);
+      expect(killSpy).toHaveBeenCalledWith(666_555, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-666_555, "SIGTERM");
+    } finally {
+      killSpy.mockRestore();
+      if (platformDesc) Object.defineProperty(process, "platform", platformDesc);
+    }
+  });
+
+  it("isProcessRunning forgets dead tracked pids and calls markStopped", async () => {
     const child = makeChild(2_147_483_647);
     spawnMock.mockReturnValue(child);
+    const markStopped = vi.fn();
     await wakeProcess(
       { id: "sess-dead", agent_group_id: "ag" },
       {
@@ -659,9 +862,11 @@ describe("process-runtime", () => {
         agentGroupName: "Agent",
         agentIdentifier: "ag",
         bunBinary: "bun",
+        markStopped,
       },
     );
     expect(isProcessRunning("sess-dead")).toBe(false);
+    expect(markStopped).toHaveBeenCalled();
   });
 
   it("cleanupProcessOrphans reaps dead pidfiles", () => {
@@ -693,9 +898,10 @@ describe("process-runtime", () => {
       return true;
     }) as typeof process.kill);
     cleanupProcessOrphans(sessionsRoot);
-    expect(killSpy).toHaveBeenCalledWith(orphanPid, "SIGTERM");
+    const termPid = process.platform === "win32" ? orphanPid : -orphanPid;
+    expect(killSpy).toHaveBeenCalledWith(termPid, "SIGTERM");
     await new Promise((r) => setTimeout(r, KILL_GRACE_MS + 20));
-    expect(killSpy).toHaveBeenCalledWith(orphanPid, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(termPid, "SIGKILL");
     killSpy.mockRestore();
   });
 
@@ -862,9 +1068,11 @@ describe("process-runtime", () => {
         "/tmp/sess",
         {
           PATH: "/usr/bin",
-          HOME: path.join(root, "synthetic-home"),
         },
-        { pathHome: operatorHome },
+        {
+          pathHome: operatorHome,
+          additions: { HOME: path.join(root, "synthetic-home") },
+        },
       );
       expect(env.PATH).toContain(path.join(operatorHome, ".bun/bin"));
       expect(env.HOME).toBe(path.join(root, "synthetic-home"));
@@ -898,7 +1106,7 @@ describe("process-runtime", () => {
       pid: number,
       signal?: NodeJS.Signals | number,
     ) => {
-      if (pid !== orphanPid) return true;
+      if (Math.abs(pid) !== orphanPid) return true;
       if (signal === 0 || signal === undefined) {
         if (!orphanAlive) {
           throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });

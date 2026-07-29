@@ -32,12 +32,6 @@ const DEFAULT_OUTBOUND_PATH = \`\${WORKING_ROOT}/outbound.db\`;
 const DEFAULT_HEARTBEAT_PATH = \`\${WORKING_ROOT}/.heartbeat\`;
 ${PATHS_END}`;
 
-const WORKING_ROOT_CWD_BLOCK = `${CWD_BEGIN}
-const CWD = process.env.WORKING_ROOT
-  ? \`\${process.env.WORKING_ROOT}/agent\`
-  : '/workspace/agent';
-${CWD_END}`;
-
 const WORKING_ROOT_CONFIG_BLOCK = `${CONFIG_BEGIN}
 const CONFIG_PATH = process.env.WORKING_ROOT
   ? \`\${process.env.WORKING_ROOT}/agent/container.json\`
@@ -113,20 +107,32 @@ export function unpatchWorkingRootPaths(content: string): string {
 }
 
 const LEGACY_CWD = /const CWD = '\/workspace\/agent';/;
+const PRE_PATCH_CWD_MARKER = `${PROCESS_MARKER}:pre-patch-cwd:`;
+
+function workingRootCwdBlock(prePatchCwdLine: string): string {
+  return `${CWD_BEGIN}
+// ${PRE_PATCH_CWD_MARKER} ${prePatchCwdLine}
+const CWD = process.env.WORKING_ROOT
+  ? \`\${process.env.WORKING_ROOT}/agent\`
+  : '/workspace/agent';
+${CWD_END}`;
+}
 
 export function patchWorkingRootCwd(content: string): string {
   let next = content;
   if (!next.includes(CWD_BEGIN)) {
-    if (!LEGACY_CWD.test(next)) {
+    const match = next.match(LEGACY_CWD);
+    if (!match) {
       throw new Error(
         `${WORKING_ROOT_INDEX_PATH} missing expected const CWD = '/workspace/agent' (anchors moved?)`,
       );
     }
-    next = next.replace(LEGACY_CWD, WORKING_ROOT_CWD_BLOCK);
+    next = next.replace(LEGACY_CWD, workingRootCwdBlock(match[0]));
   }
   // Docker default is /workspace/agent; process mode needs the resolved CWD.
+  // replaceAll: every call site must get CWD (verify only checks "at least one").
   if (next.includes("ensureMemoryScaffold();")) {
-    next = next.replace(
+    next = next.replaceAll(
       "ensureMemoryScaffold();",
       "ensureMemoryScaffold(CWD);",
     );
@@ -137,13 +143,19 @@ export function patchWorkingRootCwd(content: string): string {
 export function unpatchWorkingRootCwd(content: string): string {
   let next = content;
   if (next.includes(CWD_BEGIN)) {
+    const restored =
+      next.match(
+        new RegExp(
+          `// ${escapeRegExp(PRE_PATCH_CWD_MARKER)} (const CWD = [^\\n]+)`,
+        ),
+      )?.[1] ?? `const CWD = '/workspace/agent';`;
     const pattern = new RegExp(
       `${escapeRegExp(CWD_BEGIN)}[\\s\\S]*?${escapeRegExp(CWD_END)}`,
     );
-    next = next.replace(pattern, `const CWD = '/workspace/agent';`);
+    next = next.replace(pattern, restored);
   }
   if (next.includes("ensureMemoryScaffold(CWD);")) {
-    next = next.replace(
+    next = next.replaceAll(
       "ensureMemoryScaffold(CWD);",
       "ensureMemoryScaffold();",
     );

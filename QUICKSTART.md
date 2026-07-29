@@ -14,7 +14,9 @@ pnpm agenthosts:local                 # when available
 pnpm agenthost-process:local          # builds + file: link + install
 pnpm exec nanoclaw-agenthost-process verify
 ./container/build.sh
-# restart host
+# Host opt-in (required — per-group flag alone will not wake)
+export NANOCLAW_ALLOW_PROCESS_RUNTIME=1
+# restart host / LaunchAgent with that env
 ncl groups config update --id <id> --runtime process
 ```
 
@@ -50,8 +52,10 @@ pnpm exec nanoclaw-agenthost-process verify
 
 ## Smoke checklist
 
+- [ ] `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` set on the host before wake
 - [ ] Message round-trip without Docker for a `runtime=process` group
 - [ ] Idle kill via host-sweep / `.heartbeat` still works
 - [ ] OneCLI credentialed model call with process-materialized CA files
 - [ ] Other groups remain on `docker`
 - [ ] Host logs include sandbox-reduced WARN
+- [ ] Misconfig writes `.process.wake-blocked` after repeated fail-closed wakes

@@ -80,6 +80,7 @@ import {
   ensureProcessProviderHomes,
   isPidAlive,
   isProcessRunning,
+  isProcessRuntimeAllowed,
   killTracked,
   pidFilePath,
   processDriver,
@@ -87,9 +88,11 @@ import {
   resetProcessDriverStateForTests,
   resolveWakePaths,
   rewriteSessionioBaseUrlForHost,
+  wakeBlockedPath,
   wakeProcess,
   writePidFile,
   KILL_GRACE_MS,
+  WAKE_FAIL_BLOCK_AFTER,
 } from "./process-runtime.js";
 
 function makeChild(pid: number | undefined): EventEmitter & {
@@ -115,10 +118,12 @@ describe("process-runtime", () => {
   let runnerEntry: string;
   const prevPathPrefix = process.env.NANOCLAW_PROCESS_PATH_PREFIX;
   const prevBunBin = process.env.NANOCLAW_BUN_BIN;
+  const prevAllow = process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME;
 
   beforeEach(() => {
     resetProcessDriverStateForTests();
     spawnMock.mockReset();
+    process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME = "1";
     vi.mocked(applyProcessEnv).mockResolvedValue({
       ok: true,
       env: { HTTPS_PROXY: "http://127.0.0.1:10255" },
@@ -143,6 +148,9 @@ describe("process-runtime", () => {
     else process.env.NANOCLAW_PROCESS_PATH_PREFIX = prevPathPrefix;
     if (prevBunBin === undefined) delete process.env.NANOCLAW_BUN_BIN;
     else process.env.NANOCLAW_BUN_BIN = prevBunBin;
+    if (prevAllow === undefined)
+      delete process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME;
+    else process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME = prevAllow;
   });
 
   it("rewrites sessionio base URL for host process agents", () => {
@@ -210,7 +218,8 @@ describe("process-runtime", () => {
     const env = buildProcessAgentEnv(
       { id: "sess-1", agent_group_id: "ag-1" },
       "/tmp/sess",
-      { PATH: "/usr/bin:/bin", HOME: home },
+      { PATH: "/usr/bin:/bin" },
+      { pathHome: home },
     );
     expect(env.PATH).toContain(path.join(home, ".bun/bin"));
     expect(env.PATH).toContain(path.join(home, ".local/bin"));
@@ -674,12 +683,19 @@ describe("process-runtime", () => {
     const sessionsRoot = path.join(root, "v2-sessions");
     const orphanSession = path.join(sessionsRoot, "ag", "live");
     mkdirSync(orphanSession, { recursive: true });
-    writePidFile(orphanSession, process.pid);
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const orphanPid = 515_151;
+    writePidFile(orphanSession, orphanPid);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
+      if (pid === orphanPid) return true;
+      return true;
+    }) as typeof process.kill);
     cleanupProcessOrphans(sessionsRoot);
-    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(orphanPid, "SIGTERM");
     await new Promise((r) => setTimeout(r, KILL_GRACE_MS + 20));
-    expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(orphanPid, "SIGKILL");
     killSpy.mockRestore();
   });
 
@@ -835,7 +851,204 @@ describe("process-runtime", () => {
     expect(existsSync(path.join(sessionDir, "agent"))).toBe(true);
   });
 
-  it("getAgentGroup mock supports missing groups", () => {
-    expect(getAgentGroup("missing-group")).toBeUndefined();
+  it("PATH augment prefers operator HOME even when child HOME is synthetic", () => {
+    const operatorHome = path.join(root, "operator-home");
+    mkdirSync(path.join(operatorHome, ".bun/bin"), { recursive: true });
+    const prevHome = process.env.HOME;
+    process.env.HOME = operatorHome;
+    try {
+      const env = buildProcessAgentEnv(
+        { id: "sess-1", agent_group_id: "ag-1" },
+        "/tmp/sess",
+        {
+          PATH: "/usr/bin",
+          HOME: path.join(root, "synthetic-home"),
+        },
+        { pathHome: operatorHome },
+      );
+      expect(env.PATH).toContain(path.join(operatorHome, ".bun/bin"));
+      expect(env.HOME).toBe(path.join(root, "synthetic-home"));
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+  });
+
+  it("refuses wake without NANOCLAW_ALLOW_PROCESS_RUNTIME", async () => {
+    delete process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME;
+    expect(isProcessRuntimeAllowed()).toBe(false);
+    const ok = await wakeProcess(
+      { id: "sess-deny", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        bunBinary: "bun",
+      },
+    );
+    expect(ok).toBe(false);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("adopts an alive pidfile instead of double-spawning", async () => {
+    const orphanPid = 424_242;
+    writePidFile(sessionDir, orphanPid);
+    let orphanAlive = true;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
+      if (pid !== orphanPid) return true;
+      if (signal === 0 || signal === undefined) {
+        if (!orphanAlive) {
+          throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+        }
+        return true;
+      }
+      if (signal === "SIGTERM" || signal === "SIGKILL") {
+        // Keep alive so the adopted onExit poll hits the timeout branch.
+        return true;
+      }
+      return true;
+    }) as typeof process.kill);
+    const markRunning = vi.fn();
+    try {
+      const ok = await wakeProcess(
+        { id: "sess-adopt", agent_group_id: "ag" },
+        {
+          sessionDir,
+          groupDir,
+          agentRunnerEntry: runnerEntry,
+          bunBinary: "bun",
+          markRunning,
+        },
+      );
+      expect(ok).toBe(true);
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(markRunning).toHaveBeenCalled();
+      expect(isProcessRunning("sess-adopt")).toBe(true);
+
+      const onExit = vi.fn();
+      vi.useFakeTimers();
+      try {
+        killTracked("sess-adopt", "test", onExit, 10);
+        // Stay alive through the poll until the grace+5s timeout branch fires.
+        await vi.advanceTimersByTimeAsync(5_100);
+        expect(onExit).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("clears pidfiles that match the host pid or are already dead before spawn", async () => {
+    writePidFile(sessionDir, process.pid);
+    const child = makeChild(process.pid);
+    spawnMock.mockReturnValue(child);
+    expect(
+      await wakeProcess(
+        { id: "sess-self-pid", agent_group_id: "ag" },
+        {
+          sessionDir,
+          groupDir,
+          agentRunnerEntry: runnerEntry,
+          bunBinary: "bun",
+        },
+      ),
+    ).toBe(true);
+    expect(spawnMock).toHaveBeenCalled();
+
+    spawnMock.mockClear();
+    writePidFile(sessionDir, 2_147_483_647);
+    const child2 = makeChild(process.pid);
+    spawnMock.mockReturnValue(child2);
+    expect(
+      await wakeProcess(
+        { id: "sess-dead-pid", agent_group_id: "ag" },
+        {
+          sessionDir,
+          groupDir,
+          agentRunnerEntry: runnerEntry,
+          bunBinary: "bun",
+        },
+      ),
+    ).toBe(true);
+    expect(spawnMock).toHaveBeenCalled();
+  });
+
+  it("writes wake-blocked marker after repeated fail-closed wakes", async () => {
+    vi.mocked(applyProcessEnv).mockResolvedValue({ ok: false, env: {} });
+    for (let i = 0; i < WAKE_FAIL_BLOCK_AFTER; i += 1) {
+      await wakeProcess(
+        { id: "sess-block", agent_group_id: "ag" },
+        {
+          sessionDir,
+          groupDir,
+          agentRunnerEntry: runnerEntry,
+          bunBinary: "bun",
+        },
+      );
+    }
+    expect(existsSync(wakeBlockedPath(sessionDir))).toBe(true);
+    expect(log.error).toHaveBeenCalled();
+  });
+
+  it("blocks after repeated allow-env failures without a session dir", async () => {
+    delete process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME;
+    for (let i = 0; i < WAKE_FAIL_BLOCK_AFTER; i += 1) {
+      await wakeProcess({ id: "sess-allow-block", agent_group_id: "ag" }, {});
+    }
+    expect(log.error).toHaveBeenCalled();
+  });
+
+  it("tolerates wake-blocked marker write failures", async () => {
+    vi.mocked(applyProcessEnv).mockResolvedValue({ ok: false, env: {} });
+    const mkdirSpy = vi.spyOn(fs, "mkdirSync").mockImplementation(() => {
+      throw new Error("EACCES");
+    });
+    try {
+      for (let i = 0; i < WAKE_FAIL_BLOCK_AFTER; i += 1) {
+        await wakeProcess(
+          { id: "sess-marker-fail", agent_group_id: "ag" },
+          {
+            sessionDir,
+            groupDir,
+            agentRunnerEntry: runnerEntry,
+            bunBinary: "bun",
+          },
+        );
+      }
+      expect(log.error).toHaveBeenCalled();
+    } finally {
+      mkdirSpy.mockRestore();
+    }
+  });
+
+  it("records non-Error wake throws as wake-threw", async () => {
+    vi.mocked(applyProcessEnv).mockImplementation(async () => {
+      throw "raw-string-failure";
+    });
+    const ok = await wakeProcess(
+      { id: "sess-raw-throw", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        bunBinary: "bun",
+      },
+    );
+    expect(ok).toBe(false);
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("cleanupProcessOrphans ignores pidfiles that match the host pid", () => {
+    const sessionsRoot = path.join(root, "v2-sessions");
+    const orphanSession = path.join(sessionsRoot, "ag", "self");
+    mkdirSync(orphanSession, { recursive: true });
+    writePidFile(orphanSession, process.pid);
+    cleanupProcessOrphans(sessionsRoot);
+    expect(existsSync(pidFilePath(orphanSession))).toBe(false);
   });
 });

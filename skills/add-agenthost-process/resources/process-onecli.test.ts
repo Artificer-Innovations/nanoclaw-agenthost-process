@@ -267,14 +267,19 @@ describe("applyProcessEnv", () => {
     expect(existsSync(path.join(dir, "unmapped"))).toBe(false);
   });
 
-  it("maps bare /home/node stub to homeDir file", () => {
+  it("skips bare /home/node stubs (homeDir is a directory, not a file)", () => {
     dir = mkdtempSync(path.join(tmpdir(), "process-onecli-"));
-    const homeFile = path.join(dir, "home-as-file");
+    const homeDir = path.join(dir, "home");
+    mkdirSync(homeDir, { recursive: true });
     materializeCredentialStubs(
-      [{ containerPath: "/home/node", content: "home-root" }],
-      { homeDir: homeFile },
+      [
+        { containerPath: "/home/node", content: "home-root" },
+        { containerPath: "/home/nodeXYZ", content: "prefix-trap" },
+      ],
+      { homeDir },
     );
-    expect(readFileSync(homeFile, "utf8")).toBe("home-root");
+    expect(existsSync(path.join(homeDir, "home-root"))).toBe(false);
+    expect(existsSync(path.join(homeDir, "nodeXYZ"))).toBe(false);
   });
 
   it("skips credential stubs when none provided", () => {

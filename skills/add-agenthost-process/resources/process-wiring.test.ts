@@ -10,6 +10,7 @@ vi.mock("./log.js", () => ({
 
 vi.mock("./process-runtime.js", () => ({
   processDriver: { wake: vi.fn(), kill: vi.fn(), isRunning: vi.fn() },
+  isProcessRuntimeAllowed: () => true,
 }));
 
 describe("process wiring", () => {

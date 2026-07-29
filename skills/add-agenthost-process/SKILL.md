@@ -27,7 +27,9 @@ See also: [QUICKSTART.md](../../QUICKSTART.md) in the npm package.
 | Native host tools (GUI, TCC, tmux)     | Multi-tenant / shared hosts     |
 | Lightweight CI proof of RuntimeDriver  | Strong filesystem isolation     |
 
-**Security:** process mode runs agent code as the **host user** for configured paths. Mount allowlists only help if the driver enforces path checks. Limit which groups use `runtime=process`.
+**Security:** process mode runs agent code as the **host user** for configured paths. Mount allowlists only help if the driver enforces path checks. Limit which groups use `runtime=process`. Designed for a **single-operator macOS** host — not multi-tenant / shared-host.
+
+Wakes also require host env `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` so a casual `--runtime process` flip cannot remove the sandbox alone.
 
 ## Architecture
 
@@ -98,13 +100,20 @@ Restart the NanoClaw host.
 
 ## Enable
 
-Opt a group into process runtime (agenthosts config):
+1. Host opt-in (required):
+
+```bash
+export NANOCLAW_ALLOW_PROCESS_RUNTIME=1
+# restart NanoClaw host / LaunchAgent so the env is visible
+```
+
+2. Opt a group into process runtime (agenthosts config):
 
 ```bash
 ncl groups config update --id <agent-group-id> --runtime process
 ```
 
-Other groups stay on `docker` by default.
+Other groups stay on `docker` by default. After repeated fail-closed wakes the driver writes `.process.wake-blocked` under the session directory.
 
 ## OneCLI
 

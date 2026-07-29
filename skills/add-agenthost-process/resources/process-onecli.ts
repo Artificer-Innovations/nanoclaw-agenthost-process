@@ -198,8 +198,7 @@ function mapContainerStubPath(
   if (opts.homeDir && normalized.startsWith("/home/node/")) {
     return path.join(opts.homeDir, normalized.slice("/home/node/".length));
   }
-  if (opts.homeDir && normalized.startsWith("/home/node")) {
-    return opts.homeDir;
-  }
+  // Bare "/home/node" (or "/home/nodeXYZ") is not a writable file target when
+  // homeDir is the synthetic HOME directory — skip rather than EISDIR.
   return null;
 }

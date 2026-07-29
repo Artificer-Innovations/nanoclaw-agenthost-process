@@ -25,10 +25,13 @@ import {
 
 export const PROCESS_PID_FILENAME = ".process.pid";
 export const PROCESS_RUNTIME_DIRNAME = ".process-runtime";
+export const PROCESS_WAKE_BLOCKED_FILENAME = ".process.wake-blocked";
 export const KILL_GRACE_MS = 2_000;
+/** Consecutive fail-closed wakes before writing a blocked marker for operators. */
+export const WAKE_FAIL_BLOCK_AFTER = 5;
 
 interface TrackedChild {
-  process: ChildProcess;
+  process: ChildProcess | null;
   pid: number;
   sessionDir: string;
 }
@@ -47,6 +50,15 @@ export interface ResolvedWakePaths {
 }
 
 const activeChildren = new Map<string, TrackedChild>();
+const wakeFailures = new Map<string, number>();
+
+/** Host-level opt-in — per-group `runtime=process` alone must not unsandbox. */
+export function isProcessRuntimeAllowed(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = (env.NANOCLAW_ALLOW_PROCESS_RUNTIME ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
 
 function mergeNoProxy(current: string | undefined, extra: string): string {
   const parts = new Set(
@@ -78,16 +90,21 @@ export function rewriteSessionioBaseUrlForHost(url: string): string {
 /**
  * Env for the spawned agent-runner. Mirrors container-runner sessionio injection
  * and always sets WORKING_ROOT to the host session directory.
+ *
+ * `pathHome` defaults to the operator `process.env.HOME` so PATH augmentation
+ * still finds ~/.bun and ~/.local even when the child HOME is synthetic.
  */
 export function buildProcessAgentEnv(
   session: SessionRef,
   sessionDirectory: string,
   base: NodeJS.ProcessEnv = process.env,
+  opts?: { pathHome?: string },
 ): NodeJS.ProcessEnv {
+  const pathHome = opts?.pathHome ?? process.env.HOME;
   const env: NodeJS.ProcessEnv = {
     ...base,
     WORKING_ROOT: sessionDirectory,
-    PATH: augmentHostToolPath(base.PATH, base.HOME),
+    PATH: augmentHostToolPath(base.PATH, pathHome),
   };
 
   const transport = (base.SESSIONIO_TRANSPORT ?? "").trim().toLowerCase();
@@ -367,6 +384,99 @@ export function ensureAgentSymlink(
   fs.symlinkSync(groupDir, linkPath, "dir");
 }
 
+export function wakeBlockedPath(sessionDirPath: string): string {
+  return path.join(sessionDirPath, PROCESS_WAKE_BLOCKED_FILENAME);
+}
+
+function clearWakeFailure(sessionId: string, sessionDirPath?: string): void {
+  wakeFailures.delete(sessionId);
+  if (sessionDirPath) {
+    fs.rmSync(wakeBlockedPath(sessionDirPath), { force: true });
+  }
+}
+
+function recordWakeFailure(
+  session: SessionRef,
+  sessionDirPath: string | undefined,
+  reason: string,
+): void {
+  const count = (wakeFailures.get(session.id) ?? 0) + 1;
+  wakeFailures.set(session.id, count);
+  if (count < WAKE_FAIL_BLOCK_AFTER) {
+    log.warn("Process wake failed — host-sweep will retry", {
+      sessionId: session.id,
+      reason,
+      failures: count,
+      blockAfter: WAKE_FAIL_BLOCK_AFTER,
+    });
+    return;
+  }
+  if (sessionDirPath) {
+    try {
+      fs.mkdirSync(sessionDirPath, { recursive: true });
+      fs.writeFileSync(
+        wakeBlockedPath(sessionDirPath),
+        `${JSON.stringify(
+          {
+            sessionId: session.id,
+            agentGroupId: session.agent_group_id,
+            reason,
+            failures: count,
+            at: new Date().toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+    } catch {
+      // best-effort marker
+    }
+  }
+  log.error(
+    "Process wake blocked after repeated failures — fix config or clear .process.wake-blocked",
+    {
+      sessionId: session.id,
+      agentGroupId: session.agent_group_id,
+      reason,
+      failures: count,
+      marker: sessionDirPath
+        ? wakeBlockedPath(sessionDirPath)
+        : PROCESS_WAKE_BLOCKED_FILENAME,
+    },
+  );
+}
+
+function adoptExistingPid(
+  session: SessionRef,
+  sessionDirectory: string,
+  markRunning: () => void,
+): boolean {
+  const existingPid = readPidFile(sessionDirectory);
+  if (existingPid == null) return false;
+  if (existingPid === process.pid) {
+    clearPidFile(sessionDirectory);
+    return false;
+  }
+  if (!isPidAlive(existingPid)) {
+    clearPidFile(sessionDirectory);
+    return false;
+  }
+  log.info("Adopting existing process agent from pidfile", {
+    sessionId: session.id,
+    pid: existingPid,
+    sessionDir: sessionDirectory,
+  });
+  activeChildren.set(session.id, {
+    process: null,
+    pid: existingPid,
+    sessionDir: sessionDirectory,
+  });
+  markRunning();
+  clearWakeFailure(session.id, sessionDirectory);
+  return true;
+}
+
 export function writePidFile(sessionDirPath: string, pid: number): void {
   fs.writeFileSync(pidFilePath(sessionDirPath), `${pid}\n`, { mode: 0o600 });
 }
@@ -414,7 +524,19 @@ export function killTracked(
   log.info("Killing process agent", { sessionId, reason, pid: entry.pid });
 
   if (onExit) {
-    entry.process.once("close", onExit);
+    if (entry.process) {
+      entry.process.once("close", onExit);
+    } else {
+      // Adopted from pidfile — no ChildProcess handle; poll until gone.
+      const started = Date.now();
+      const poll = setInterval(() => {
+        if (!isPidAlive(entry.pid) || Date.now() - started > graceMs + 5_000) {
+          clearInterval(poll);
+          onExit();
+        }
+      }, 50);
+      poll.unref?.();
+    }
   }
 
   terminatePid(entry.pid, "SIGTERM");
@@ -447,13 +569,25 @@ export async function wakeProcess(
   session: SessionRef,
   ctx: WakeContext,
 ): Promise<boolean> {
+  if (!isProcessRuntimeAllowed()) {
+    log.error(
+      "Process runtime refused — set NANOCLAW_ALLOW_PROCESS_RUNTIME=1 on the host to opt in",
+      { sessionId: session.id, agentGroupId: session.agent_group_id },
+    );
+    recordWakeFailure(session, undefined, "allow-env-unset");
+    return false;
+  }
+
   if (activeChildren.has(session.id)) {
     log.debug("Process agent already running", { sessionId: session.id });
     return true;
   }
 
   const resolved = resolveWakePaths(session, ctx);
-  if (!resolved) return false;
+  if (!resolved) {
+    recordWakeFailure(session, undefined, "resolve-paths-failed");
+    return false;
+  }
 
   const {
     sessionDir: sessionDirectory,
@@ -468,8 +602,13 @@ export async function wakeProcess(
     markStopped,
   } = resolved;
 
+  if (adoptExistingPid(session, sessionDirectory, markRunning)) {
+    return true;
+  }
+
   if (!fs.existsSync(agentRunnerEntry)) {
     log.error("Agent runner entry not found", { agentRunnerEntry });
+    recordWakeFailure(session, sessionDirectory, "runner-entry-missing");
     return false;
   }
 
@@ -499,18 +638,24 @@ export async function wakeProcess(
           sessionId: session.id,
         },
       );
+      recordWakeFailure(session, sessionDirectory, "onecli-unavailable");
       return false;
     }
 
-    const env = buildProcessAgentEnv(session, sessionDirectory, {
-      ...process.env,
-      ...extraEnv,
-      ...onecli.env,
-      // Match container HOME=/home/node + /.codex mount so Codex uses the
-      // group-shared auth stub and OneCLI can inject vault credentials.
-      HOME: homes.home,
-      CODEX_HOME: homes.codexHome,
-    });
+    // PATH augment uses operator HOME; child HOME is set after so Codex/Claude
+    // stay on the synthetic provider homes instead of the operator keychain.
+    const env = buildProcessAgentEnv(
+      session,
+      sessionDirectory,
+      {
+        ...process.env,
+        ...extraEnv,
+        ...onecli.env,
+        HOME: homes.home,
+        CODEX_HOME: homes.codexHome,
+      },
+      { pathHome: process.env.HOME },
+    );
 
     const child = spawn(bunBinary, ["run", agentRunnerEntry], {
       cwd: groupDir,
@@ -523,6 +668,7 @@ export async function wakeProcess(
       log.error("Process agent spawn returned no pid", {
         sessionId: session.id,
       });
+      recordWakeFailure(session, sessionDirectory, "spawn-no-pid");
       return false;
     }
 
@@ -533,6 +679,7 @@ export async function wakeProcess(
       sessionDir: sessionDirectory,
     });
     markRunning();
+    clearWakeFailure(session.id, sessionDirectory);
 
     const stderrTail: string[] = [];
     child.stderr?.on("data", (data: Buffer) => {
@@ -570,10 +717,11 @@ export async function wakeProcess(
     });
     return true;
   } catch (err) {
-    log.warn("wake process agent failed — host-sweep will retry", {
-      sessionId: session.id,
-      err,
-    });
+    recordWakeFailure(
+      session,
+      sessionDirectory,
+      err instanceof Error ? err.message : "wake-threw",
+    );
     return false;
   }
 }
@@ -600,6 +748,10 @@ export function cleanupProcessOrphans(sessionsRoot?: string): void {
     for (const sessionDirectory of listDirs(agentDir)) {
       const pid = readPidFile(sessionDirectory);
       if (pid == null) continue;
+      if (pid === process.pid) {
+        clearPidFile(sessionDirectory);
+        continue;
+      }
       if (isPidAlive(pid)) {
         log.warn("Reaping orphan process agent", {
           pid,
@@ -636,6 +788,7 @@ function listDirs(parent: string): string[] {
 /** Test helper — clear in-memory tracking. */
 export function resetProcessDriverStateForTests(): void {
   activeChildren.clear();
+  wakeFailures.clear();
 }
 
 export const processDriver: RuntimeDriver = {

@@ -4,6 +4,8 @@ A **process** `RuntimeDriver` plugin for [nanoclaw-agenthosts](https://github.co
 
 It runs each opted-in agent as a local `bun` child process on the NanoClaw host machine — no Docker daemon for those groups. That makes this package a concrete **proof of concept** of what agenthosts enables: pluggable runtimes so the host can wake/kill agents without assuming “local Docker container.”
 
+**Audience:** a single-operator **macOS** host (Homebrew PATH, TCC, Keychain). This is **not** a multi-tenant or shared-host runtime — do not expect Linux parity or safe use on a box shared by multiple operators.
+
 ## Why this exists
 
 [nanoclaw-agenthosts](https://github.com/Artificer-Innovations/nanoclaw-agenthosts) turns NanoClaw’s container lifecycle into a registry. Drivers can target different container platforms, sibling processes on the same box, or (with a network mailbox such as [nanoclaw-sessionio](https://github.com/Artificer-Innovations/nanoclaw-sessionio)) agents on other physical machines.
@@ -23,6 +25,13 @@ NanoClaw’s default design isolates each agent in a **container**. Process mode
 
 Prefer Docker (or another sandboxed runtime) for untrusted channel content. Use `process` only when you have a deliberate need for non-contained agents, and limit which groups opt in.
 
+Enabling process mode requires **two** deliberate steps so a typo on `--runtime` alone cannot unsandbox an agent:
+
+1. Host env: `NANOCLAW_ALLOW_PROCESS_RUNTIME=1` (LaunchAgent / shell profile / `.env`)
+2. Per-group: `ncl groups config update --id <id> --runtime process`
+
+Wakes fail closed until the allow env is set. After repeated fail-closed wakes the driver writes `.process.wake-blocked` under the session dir and logs an error so misconfiguration is visible.
+
 ## Dependency
 
 Requires **`nanoclaw-agenthosts` API v1** installed and verified in the NanoClaw fork first (`pnpm exec nanoclaw-agenthosts verify`). This package does not replace agenthosts — it registers one driver on top of it.
@@ -37,6 +46,13 @@ pnpm exec nanoclaw-agenthosts install
 pnpm exec nanoclaw-agenthost-process install
 pnpm run build && ./container/build.sh
 pnpm exec nanoclaw-agenthost-process verify
+```
+
+Host opt-in (required):
+
+```bash
+export NANOCLAW_ALLOW_PROCESS_RUNTIME=1
+# then restart the NanoClaw host / LaunchAgent
 ```
 
 Opt in a group:

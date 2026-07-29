@@ -703,6 +703,14 @@ export async function wakeProcess(
         pid: existing.pid,
       });
       await waitForPidExit(existing.pid, KILL_GRACE_MS + 500);
+      if (isPidAlive(existing.pid)) {
+        log.warn(
+          "Process agent still alive after kill wait — refusing re-wake to avoid double-spawn",
+          { sessionId: session.id, pid: existing.pid },
+        );
+        recordWakeFailure(session, existing.sessionDir, "kill-still-alive");
+        return false;
+      }
       forgetChild(session.id, existing.sessionDir, existing.markStopped);
     } else {
       log.debug("Process agent already running", { sessionId: session.id });

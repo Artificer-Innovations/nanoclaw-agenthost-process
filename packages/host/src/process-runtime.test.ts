@@ -752,6 +752,54 @@ describe("process-runtime", () => {
     killSpy.mockRestore();
   });
 
+  it("wakeProcess refuses re-wake when kill-in-flight pid stays alive", async () => {
+    const first = makeChild(555_666);
+    spawnMock.mockReturnValueOnce(first);
+    await wakeProcess(
+      { id: "sess-stuckkill", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => {
+      if (Math.abs(pid) !== 555_666) return true;
+      // Always "alive" for signal 0; accept terminate signals but never die.
+      if (signal === 0 || signal === undefined) return true;
+      return true;
+    }) as typeof process.kill);
+    killTracked("sess-stuckkill", "replace", undefined, 5);
+    expect(isProcessRunning("sess-stuckkill")).toBe(false);
+
+    const ok = await wakeProcess(
+      { id: "sess-stuckkill", agent_group_id: "ag" },
+      {
+        sessionDir,
+        groupDir,
+        agentRunnerEntry: runnerEntry,
+        agentGroupName: "Agent",
+        agentIdentifier: "ag",
+        bunBinary: "bun",
+      },
+    );
+    expect(ok).toBe(false);
+    // Still tracked — do not clear pidfile / allow a concurrent spawn.
+    expect(isProcessRunning("sess-stuckkill")).toBe(false);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("still alive after kill wait"),
+      expect.objectContaining({ sessionId: "sess-stuckkill", pid: 555_666 }),
+    );
+    killSpy.mockRestore();
+  });
+
   it("isProcessRunning uses stored markStopped when self-healing", async () => {
     const child = makeChild(2_147_483_646);
     spawnMock.mockReturnValue(child);

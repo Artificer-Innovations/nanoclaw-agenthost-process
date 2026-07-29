@@ -778,26 +778,33 @@ describe("process-runtime", () => {
     killTracked("sess-stuckkill", "replace", undefined, 5);
     expect(isProcessRunning("sess-stuckkill")).toBe(false);
 
-    const ok = await wakeProcess(
-      { id: "sess-stuckkill", agent_group_id: "ag" },
-      {
-        sessionDir,
-        groupDir,
-        agentRunnerEntry: runnerEntry,
-        agentGroupName: "Agent",
-        agentIdentifier: "ag",
-        bunBinary: "bun",
-      },
-    );
-    expect(ok).toBe(false);
-    // Still tracked — do not clear pidfile / allow a concurrent spawn.
-    expect(isProcessRunning("sess-stuckkill")).toBe(false);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("still alive after kill wait"),
-      expect.objectContaining({ sessionId: "sess-stuckkill", pid: 555_666 }),
-    );
-    killSpy.mockRestore();
+    vi.useFakeTimers();
+    try {
+      const wakePromise = wakeProcess(
+        { id: "sess-stuckkill", agent_group_id: "ag" },
+        {
+          sessionDir,
+          groupDir,
+          agentRunnerEntry: runnerEntry,
+          agentGroupName: "Agent",
+          agentIdentifier: "ag",
+          bunBinary: "bun",
+        },
+      );
+      await vi.advanceTimersByTimeAsync(KILL_GRACE_MS + 600);
+      const ok = await wakePromise;
+      expect(ok).toBe(false);
+      // Still tracked — do not clear pidfile / allow a concurrent spawn.
+      expect(isProcessRunning("sess-stuckkill")).toBe(false);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("still alive after kill wait"),
+        expect.objectContaining({ sessionId: "sess-stuckkill", pid: 555_666 }),
+      );
+    } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
+    }
   });
 
   it("isProcessRunning uses stored markStopped when self-healing", async () => {
@@ -1096,6 +1103,17 @@ describe("process-runtime", () => {
   it("isPidAlive returns boolean", () => {
     expect(isPidAlive(process.pid)).toBe(true);
     expect(isPidAlive(2_147_483_647)).toBe(false);
+  });
+
+  it("isPidAlive treats EPERM as alive", () => {
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    });
+    try {
+      expect(isPidAlive(12345)).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   it("exports KILL_GRACE_MS", () => {

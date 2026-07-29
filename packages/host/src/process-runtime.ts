@@ -591,8 +591,15 @@ export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM: process exists but we lack permission — treat as alive (conservative)
+    // so wake/kill gates do not clear tracking and double-spawn.
+    return (
+      err !== null &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as NodeJS.ErrnoException).code === "EPERM"
+    );
   }
 }
 

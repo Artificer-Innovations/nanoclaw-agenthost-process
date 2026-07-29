@@ -17,9 +17,9 @@ vi.mock("./env.js", () => ({
 }));
 
 vi.mock("./process-runtime.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("./process-runtime.js")
-  >("./process-runtime.js");
+  const actual = await vi.importActual<typeof import("./process-runtime.js")>(
+    "./process-runtime.js",
+  );
   return {
     ...actual,
     processDriver: { wake: vi.fn(), kill: vi.fn(), isRunning: vi.fn() },
@@ -38,7 +38,8 @@ describe("process-boot", () => {
   });
 
   afterEach(async () => {
-    if (prevAllow === undefined) delete process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME;
+    if (prevAllow === undefined)
+      delete process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME;
     else process.env.NANOCLAW_ALLOW_PROCESS_RUNTIME = prevAllow;
   });
 

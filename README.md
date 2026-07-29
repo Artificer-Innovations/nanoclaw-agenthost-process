@@ -52,7 +52,7 @@ pnpm exec nanoclaw-agenthost-process verify
 
 Host opt-in (required) — add to NanoClaw `.env`, then restart the host:
 
-```bash
+```env
 NANOCLAW_ALLOW_PROCESS_RUNTIME=1
 ```
 

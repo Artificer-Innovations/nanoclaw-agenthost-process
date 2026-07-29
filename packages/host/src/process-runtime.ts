@@ -497,13 +497,30 @@ export function ensureCodexFileCredentialsStore(codexHome: string): void {
   }
 
   if (missing.length) {
-    const trimmed = next.trimEnd();
-    next = `${trimmed ? `${trimmed}\n` : ""}${missing.join("\n")}\n`;
+    next = insertTomlTopLevelLines(next, missing);
   } else if (!next.endsWith("\n")) {
     next = `${next}\n`;
   }
 
   if (next !== existing) fs.writeFileSync(configPath, next, { mode: 0o600 });
+}
+
+/** Insert top-level TOML keys before the first table header (not at EOF). */
+export function insertTomlTopLevelLines(
+  content: string,
+  lines: string[],
+): string {
+  if (!lines.length) return content;
+  const block = `${lines.join("\n")}\n`;
+  const tableMatch = /^(?:\s*\[[^\]]+\]\s*)$/m.exec(content);
+  if (tableMatch?.index != null) {
+    const idx = tableMatch.index;
+    const before = content.slice(0, idx).trimEnd();
+    const after = content.slice(idx);
+    return `${before ? `${before}\n` : ""}${block}${after}`;
+  }
+  const trimmed = content.trimEnd();
+  return `${trimmed ? `${trimmed}\n` : ""}${block}`;
 }
 
 export function ensureAgentSymlink(

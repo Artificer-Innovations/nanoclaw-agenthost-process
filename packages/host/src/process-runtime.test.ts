@@ -521,6 +521,24 @@ describe("process-runtime", () => {
       ),
     ).toBe(true);
 
+    // Missing top-level keys must be inserted BEFORE the first table, not at EOF.
+    writeFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      ["[features]", "memories = false", ""].join("\n"),
+    );
+    ensureCodexFileCredentialsStore(homes.codexHome);
+    const beforeTable = readFileSync(
+      path.join(homes.codexHome, "config.toml"),
+      "utf8",
+    );
+    expect(beforeTable.indexOf("cli_auth_credentials_store")).toBeLessThan(
+      beforeTable.indexOf("[features]"),
+    );
+    expect(beforeTable.indexOf("mcp_oauth_credentials_store")).toBeLessThan(
+      beforeTable.indexOf("[features]"),
+    );
+    expect(beforeTable).toContain("secret_auth_storage = false");
+
     writeFileSync(
       path.join(homes.codexHome, "config.toml"),
       'sandbox_mode = "danger-full-access"\n',

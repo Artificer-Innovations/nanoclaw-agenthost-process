@@ -591,8 +591,15 @@ export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM: process exists but we lack permission — treat as alive (conservative)
+    // so wake/kill gates do not clear tracking and double-spawn.
+    return (
+      err !== null &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as NodeJS.ErrnoException).code === "EPERM"
+    );
   }
 }
 
@@ -703,6 +710,14 @@ export async function wakeProcess(
         pid: existing.pid,
       });
       await waitForPidExit(existing.pid, KILL_GRACE_MS + 500);
+      if (isPidAlive(existing.pid)) {
+        log.warn(
+          "Process agent still alive after kill wait — refusing re-wake to avoid double-spawn",
+          { sessionId: session.id, pid: existing.pid },
+        );
+        recordWakeFailure(session, existing.sessionDir, "kill-still-alive");
+        return false;
+      }
       forgetChild(session.id, existing.sessionDir, existing.markStopped);
     } else {
       log.debug("Process agent already running", { sessionId: session.id });

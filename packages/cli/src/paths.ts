@@ -205,14 +205,52 @@ export function ensureConsumerRuntimeDependencies(
 }
 
 /**
+ * True when some consumer source other than process-runtime.ts still imports
+ * `name` — uninstall must leave those pins alone.
+ */
+function consumerImportsDependency(
+  nanoclawRoot: string,
+  name: string,
+): boolean {
+  const srcRoot = path.join(nanoclawRoot, "src");
+  if (!fs.existsSync(srcRoot)) return false;
+  const needle = new RegExp(
+    `from\\s+['"]${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['"]`,
+  );
+  const skip = new Set(["process-runtime.ts"]);
+  const walk = (dir: string): boolean => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (walk(full)) return true;
+        continue;
+      }
+      if (!/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
+      if (skip.has(entry.name) && path.dirname(full) === srcRoot) continue;
+      try {
+        if (needle.test(fs.readFileSync(full, "utf8"))) return true;
+      } catch {
+        /* ignore unreadable */
+      }
+    }
+    return false;
+  };
+  return walk(srcRoot);
+}
+
+/**
  * Drop runtime deps that were only needed for copied host sources.
- * Only removes a name when process-runtime.ts is gone (the importer of smol-toml).
+ * Only removes when:
+ * - process-runtime.ts is gone (the importer we installed)
+ * - the pin's version range matches what this package would have added
+ * - no other consumer source still imports the package
  */
 export function removeConsumerRuntimeDependencies(
   nanoclawRoot: string,
   startDir: string = __dirname,
 ): { changed: boolean; removed: string[] } {
-  const candidates = Object.keys(consumerRuntimeDependencies(startDir));
+  const required = consumerRuntimeDependencies(startDir);
+  const candidates = Object.entries(required);
   if (!candidates.length) return { changed: false, removed: [] };
 
   const processRuntime = path.join(nanoclawRoot, "src/process-runtime.ts");
@@ -230,12 +268,14 @@ export function removeConsumerRuntimeDependencies(
   };
 
   const removed: string[] = [];
-  for (const name of candidates) {
-    if (pkg.dependencies?.[name]) {
+  for (const [name, expectedRange] of candidates) {
+    if (consumerImportsDependency(nanoclawRoot, name)) continue;
+
+    if (pkg.dependencies?.[name] === expectedRange) {
       delete pkg.dependencies[name];
       removed.push(name);
     }
-    if (pkg.devDependencies?.[name]) {
+    if (pkg.devDependencies?.[name] === expectedRange) {
       delete pkg.devDependencies[name];
       if (!removed.includes(name)) removed.push(name);
     }

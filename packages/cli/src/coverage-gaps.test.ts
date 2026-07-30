@@ -531,6 +531,57 @@ describe("resourcesDir", () => {
     }
   });
 
+  it("removeConsumerRuntimeDependencies keeps a differently-ranged smol-toml pin", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-range-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^2.0.0" },
+        }),
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+      expect(
+        JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
+          .dependencies["smol-toml"],
+      ).toBe("^2.0.0");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps smol-toml when another source imports it", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-import-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "src", "custom.ts"),
+        `import { parse } from 'smol-toml';\nexport const x = parse;\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+      expect(
+        JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
+          .dependencies["smol-toml"],
+      ).toBe("^1.7.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("removeConsumerRuntimeDependencies no-ops without candidates, package.json, or pins", () => {
     const fake = mkdtempSync(path.join(tmpdir(), "ahp-rm-empty-"));
     try {

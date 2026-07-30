@@ -19,6 +19,7 @@ import {
   findMissingConsumerRuntimeDependencies,
   findNanoclawRoot,
   readPackageVersion,
+  removeConsumerRuntimeDependencies,
 } from "./paths.js";
 
 interface PendingWrite {
@@ -146,6 +147,7 @@ export function runUninstall(root?: string): {
   root: string;
   changed: string[];
   removed: string[];
+  runtimeDepsRemoved: string[];
 } {
   const nanoclawRoot = root ?? findNanoclawRoot();
   const pending: PendingWrite[] = [];
@@ -184,10 +186,17 @@ export function runUninstall(root?: string): {
     removed.push(".claude/skills/add-agenthost-process");
   }
 
+  const deps = removeConsumerRuntimeDependencies(nanoclawRoot);
+  const changed = pending.map((write) =>
+    path.relative(nanoclawRoot, write.path),
+  );
+  if (deps.changed) changed.push("package.json");
+
   return {
     root: nanoclawRoot,
-    changed: pending.map((write) => path.relative(nanoclawRoot, write.path)),
+    changed,
     removed,
+    runtimeDepsRemoved: deps.removed,
   };
 }
 

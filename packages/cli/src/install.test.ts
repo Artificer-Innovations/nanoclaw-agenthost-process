@@ -109,6 +109,7 @@ describe("install lifecycle", () => {
 
     const removed = runUninstall(root);
     expect(removed.removed).toContain("src/process-boot.ts");
+    expect(removed.runtimeDepsRemoved).toContain("smol-toml");
     expect(existsSync(path.join(root, "src/process-boot.ts"))).toBe(false);
     expect(
       readFileSync(
@@ -119,6 +120,10 @@ describe("install lifecycle", () => {
     expect(readFileSync(path.join(root, "src/index.ts"), "utf8")).not.toContain(
       "startAgenthostProcess",
     );
+    const pkgAfter = JSON.parse(
+      readFileSync(path.join(root, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(pkgAfter.dependencies?.["smol-toml"]).toBeUndefined();
   });
 
   it("verify accepts smol-toml listed under devDependencies", () => {

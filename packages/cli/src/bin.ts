@@ -62,13 +62,24 @@ export function runCommand(argv: string[]): number {
         console.log(
           `Changed ${result.changed.length} files; deleted ${result.removed.length} files.`,
         );
+        if (result.runtimeDepsRemoved.length) {
+          console.log(
+            `Removed package.json dependencies: ${result.runtimeDepsRemoved.join(", ")}`,
+          );
+        }
         console.log(
           "\nSee .claude/skills/add-agenthost-process/REMOVE.md if present.",
         );
         console.log("Optional: pnpm remove nanoclaw-agenthost-process");
-        console.log(
-          "Then: pnpm run build && ./container/build.sh && restart host",
-        );
+        if (result.runtimeDepsRemoved.length) {
+          console.log(
+            "Then: pnpm install && pnpm run build && ./container/build.sh && restart host",
+          );
+        } else {
+          console.log(
+            "Then: pnpm run build && ./container/build.sh && restart host",
+          );
+        }
         return 0;
       }
       default:
@@ -79,7 +90,7 @@ Commands:
   upgrade      Re-copy + re-patch (idempotent install)
   sync-skill   Copy bundled skill to .claude/skills/add-agenthost-process/
   verify       Check agenthosts peer, files, and markers
-  uninstall    Remove files, boot block, and WORKING_ROOT patches
+  uninstall    Remove files, boot block, WORKING_ROOT patches, and runtime deps
 `);
         return command === "help" ? 0 : 1;
     }

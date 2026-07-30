@@ -203,3 +203,52 @@ export function ensureConsumerRuntimeDependencies(
   fs.writeFileSync(pkgPath, next);
   return { changed: true, added };
 }
+
+/**
+ * Drop runtime deps that were only needed for copied host sources.
+ * Only removes a name when process-runtime.ts is gone (the importer of smol-toml).
+ */
+export function removeConsumerRuntimeDependencies(
+  nanoclawRoot: string,
+  startDir: string = __dirname,
+): { changed: boolean; removed: string[] } {
+  const candidates = Object.keys(consumerRuntimeDependencies(startDir));
+  if (!candidates.length) return { changed: false, removed: [] };
+
+  const processRuntime = path.join(nanoclawRoot, "src/process-runtime.ts");
+  if (fs.existsSync(processRuntime)) {
+    return { changed: false, removed: [] };
+  }
+
+  const pkgPath = path.join(nanoclawRoot, "package.json");
+  if (!fs.existsSync(pkgPath)) return { changed: false, removed: [] };
+
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    [key: string]: unknown;
+  };
+
+  const removed: string[] = [];
+  for (const name of candidates) {
+    if (pkg.dependencies?.[name]) {
+      delete pkg.dependencies[name];
+      removed.push(name);
+    }
+    if (pkg.devDependencies?.[name]) {
+      delete pkg.devDependencies[name];
+      if (!removed.includes(name)) removed.push(name);
+    }
+  }
+  if (!removed.length) return { changed: false, removed: [] };
+
+  if (pkg.dependencies && Object.keys(pkg.dependencies).length === 0) {
+    delete pkg.dependencies;
+  }
+  if (pkg.devDependencies && Object.keys(pkg.devDependencies).length === 0) {
+    delete pkg.devDependencies;
+  }
+
+  fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  return { changed: true, removed };
+}

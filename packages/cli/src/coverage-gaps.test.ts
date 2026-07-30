@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
   existsSync,
@@ -28,6 +29,7 @@ import {
   findMissingConsumerRuntimeDependencies,
   packageRoot,
   readPackageVersion,
+  removeConsumerRuntimeDependencies,
   resourcesDir,
 } from "./paths.js";
 import { runInstall, runUninstall, runVerify } from "./install.js";
@@ -466,6 +468,59 @@ describe("resourcesDir", () => {
           i.includes("smol-toml"),
         ),
       ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps smol-toml while process-runtime.ts remains", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-keepdep-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(path.join(dir, "src/process-runtime.ts"), "export {};\n");
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+      expect(
+        JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
+          .dependencies["smol-toml"],
+      ).toBe("^1.7.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies drops smol-toml when process-runtime.ts is gone", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rmdep-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1", other: "1.0.0" },
+          devDependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      const result = removeConsumerRuntimeDependencies(dir);
+      expect(result.changed).toBe(true);
+      expect(result.removed).toContain("smol-toml");
+      const pkg = JSON.parse(
+        readFileSync(path.join(dir, "package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      expect(pkg.dependencies?.["smol-toml"]).toBeUndefined();
+      expect(pkg.dependencies?.other).toBe("1.0.0");
+      expect(pkg.devDependencies).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

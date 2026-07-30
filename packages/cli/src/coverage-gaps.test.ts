@@ -99,6 +99,11 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
     expect(runCommand(["node", "bin.js", "uninstall", "--path", root])).toBe(0);
   });
 
+  it("uninstall via runCommand with no runtime deps to remove", () => {
+    seed();
+    expect(runCommand(["node", "bin.js", "uninstall", "--path", root])).toBe(0);
+  });
+
   it("verify returns 1 on failure", () => {
     seed();
     expect(runCommand(["node", "bin.js", "verify", "--path", root])).toBe(1);
@@ -523,6 +528,71 @@ describe("resourcesDir", () => {
       expect(pkg.devDependencies).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies no-ops without candidates, package.json, or pins", () => {
+    const fake = mkdtempSync(path.join(tmpdir(), "ahp-rm-empty-"));
+    try {
+      writeFileSync(
+        path.join(fake, "package.json"),
+        JSON.stringify({ name: "nanoclaw-agenthost-process" }),
+      );
+      mkdirSync(path.join(fake, "packages/host"), { recursive: true });
+      writeFileSync(
+        path.join(fake, "packages/host/package.json"),
+        JSON.stringify({ name: "@nanoclaw-agenthost-process/host" }),
+      );
+      // host has no smol-toml pin → empty candidates
+      expect(removeConsumerRuntimeDependencies(fake, fake)).toEqual({
+        changed: false,
+        removed: [],
+      });
+
+      const noPkg = mkdtempSync(path.join(tmpdir(), "ahp-rm-nopkg-"));
+      try {
+        expect(removeConsumerRuntimeDependencies(noPkg)).toEqual({
+          changed: false,
+          removed: [],
+        });
+      } finally {
+        rmSync(noPkg, { recursive: true, force: true });
+      }
+
+      const onlyDev = mkdtempSync(path.join(tmpdir(), "ahp-rm-dev-"));
+      try {
+        writeFileSync(
+          path.join(onlyDev, "package.json"),
+          JSON.stringify({
+            name: "fork",
+            devDependencies: { "smol-toml": "^1.7.1" },
+          }),
+        );
+        const result = removeConsumerRuntimeDependencies(onlyDev);
+        expect(result.removed).toEqual(["smol-toml"]);
+        expect(
+          JSON.parse(readFileSync(path.join(onlyDev, "package.json"), "utf8"))
+            .devDependencies,
+        ).toBeUndefined();
+      } finally {
+        rmSync(onlyDev, { recursive: true, force: true });
+      }
+
+      const absent = mkdtempSync(path.join(tmpdir(), "ahp-rm-absent-"));
+      try {
+        writeFileSync(
+          path.join(absent, "package.json"),
+          JSON.stringify({ name: "fork", dependencies: { other: "1" } }),
+        );
+        expect(removeConsumerRuntimeDependencies(absent)).toEqual({
+          changed: false,
+          removed: [],
+        });
+      } finally {
+        rmSync(absent, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(fake, { recursive: true, force: true });
     }
   });
 });

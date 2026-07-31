@@ -22,6 +22,7 @@ describe("boot block", () => {
     expect(twice).toBe(once);
     const removed = removeProcessBootBlockContent(once);
     expect(hasProcessBootBlock(removed)).toBe(false);
+    expect(removed).not.toMatch(/(?:\r?\n){3,}/);
   });
 
   it("finds insert point before initChannelAdapters", () => {
@@ -33,6 +34,20 @@ describe("boot block", () => {
     expect(() =>
       insertProcessBootBlockContent("export const x = 1;\n"),
     ).toThrow(/boot insert point/);
+  });
+
+  it("collapses CRLF blank runs after boot-block removal", () => {
+    const source =
+      "async function main() {\r\n  await startCliServer();\r\n  await initChannelAdapters();\r\n}\r\n";
+    const withBoot = insertProcessBootBlockContent(source);
+    // Simulate extra blank lines around the removal site (CRLF).
+    const padded = withBoot.replace(
+      "\r\n  await initChannelAdapters()",
+      "\r\n\r\n\r\n  await initChannelAdapters()",
+    );
+    const removed = removeProcessBootBlockContent(padded);
+    expect(hasProcessBootBlock(removed)).toBe(false);
+    expect(removed).not.toMatch(/(?:\r?\n){3,}/);
   });
 });
 

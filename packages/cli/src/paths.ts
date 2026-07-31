@@ -203,3 +203,114 @@ export function ensureConsumerRuntimeDependencies(
   fs.writeFileSync(pkgPath, next);
   return { changed: true, added };
 }
+
+const CONSUMER_SOURCE_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
+
+/**
+ * True when some consumer source other than process-runtime.ts still imports
+ * `name` — uninstall must leave those pins alone.
+ */
+function consumerImportsDependency(
+  nanoclawRoot: string,
+  name: string,
+): boolean {
+  const srcRoot = path.join(nanoclawRoot, "src");
+  if (!fs.existsSync(srcRoot)) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Static ESM (incl. side-effect import), CJS require(), and dynamic import()
+  // — any of these means the fork still uses the dep; uninstall must leave the pin.
+  const needle = new RegExp(
+    `(?:from\\s+['"]${escaped}['"]|import\\s+['"]${escaped}['"]|require\\(\\s*['"]${escaped}['"]\\s*\\)|import\\(\\s*['"]${escaped}['"]\\s*\\))`,
+  );
+  const walk = (dir: string): boolean => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      // Fail closed: keep the pin when a subtree cannot be scanned. Leaving a
+      // stale pin is cheap; removing one a consumer still imports breaks builds.
+      console.warn(
+        `nanoclaw-agenthost-process: could not read ${dir} while scanning for ${name} imports; keeping dependency pin (${
+          err instanceof Error ? err.message : String(err)
+        })`,
+      );
+      return true;
+    }
+    // Codepoint order — Dirent names are unique per directory, so `<` alone is enough.
+    /* v8 ignore next -- sort comparator; both arms need ≥2 opposite-order compares */
+    entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (walk(full)) return true;
+        continue;
+      }
+      // TS + JS under src/ (compiled or hand-written CJS).
+      if (!CONSUMER_SOURCE_EXTS.has(path.extname(entry.name))) continue;
+      let text: string;
+      try {
+        text = fs.readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
+      if (needle.test(text)) return true;
+    }
+    return false;
+  };
+  return walk(srcRoot);
+}
+
+/**
+ * Drop runtime deps that were only needed for copied host sources.
+ * Only removes when:
+ * - process-runtime.ts is gone (the importer we installed)
+ * - the pin's version range matches what this package would have added
+ * - no other consumer source still imports the package
+ */
+export function removeConsumerRuntimeDependencies(
+  nanoclawRoot: string,
+  startDir: string = __dirname,
+): { changed: boolean; removed: string[] } {
+  const required = consumerRuntimeDependencies(startDir);
+  const candidates = Object.entries(required);
+  if (!candidates.length) return { changed: false, removed: [] };
+
+  const processRuntime = path.join(nanoclawRoot, "src/process-runtime.ts");
+  if (fs.existsSync(processRuntime)) {
+    return { changed: false, removed: [] };
+  }
+
+  const pkgPath = path.join(nanoclawRoot, "package.json");
+  if (!fs.existsSync(pkgPath)) return { changed: false, removed: [] };
+
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    [key: string]: unknown;
+  };
+
+  const removed: string[] = [];
+  for (const [name, expectedRange] of candidates) {
+    if (consumerImportsDependency(nanoclawRoot, name)) continue;
+
+    if (pkg.dependencies?.[name] === expectedRange) {
+      delete pkg.dependencies[name];
+      removed.push(name);
+    }
+    if (pkg.devDependencies?.[name] === expectedRange) {
+      delete pkg.devDependencies[name];
+      if (!removed.includes(name)) removed.push(name);
+    }
+  }
+  if (!removed.length) return { changed: false, removed: [] };
+
+  if (pkg.dependencies && Object.keys(pkg.dependencies).length === 0) {
+    delete pkg.dependencies;
+  }
+  if (pkg.devDependencies && Object.keys(pkg.devDependencies).length === 0) {
+    delete pkg.devDependencies;
+  }
+
+  fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  return { changed: true, removed };
+}

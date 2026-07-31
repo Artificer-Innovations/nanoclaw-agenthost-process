@@ -20,5 +20,6 @@ pnpm run build
 - Boot block in `src/index.ts`
 - `WORKING_ROOT` marker patches in agent-runner
 - `.claude/skills/add-agenthost-process/`
+- Runtime deps this package added to the fork `package.json` (at least `smol-toml`), when `src/process-runtime.ts` is gone — run `pnpm install` afterward
 
 It does **not** remove `nanoclaw-agenthosts` or change other groups’ runtimes beyond what you configure.

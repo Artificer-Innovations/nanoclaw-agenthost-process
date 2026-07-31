@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
   existsSync,
@@ -28,6 +29,7 @@ import {
   findMissingConsumerRuntimeDependencies,
   packageRoot,
   readPackageVersion,
+  removeConsumerRuntimeDependencies,
   resourcesDir,
 } from "./paths.js";
 import { runInstall, runUninstall, runVerify } from "./install.js";
@@ -94,6 +96,11 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
     expect(runCommand(["node", "bin.js", "sync-skill", "--path", root])).toBe(
       0,
     );
+    expect(runCommand(["node", "bin.js", "uninstall", "--path", root])).toBe(0);
+  });
+
+  it("uninstall via runCommand with no runtime deps to remove", () => {
+    seed();
     expect(runCommand(["node", "bin.js", "uninstall", "--path", root])).toBe(0);
   });
 
@@ -468,6 +475,388 @@ describe("resourcesDir", () => {
       ).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps smol-toml while process-runtime.ts remains", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-keepdep-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(path.join(dir, "src/process-runtime.ts"), "export {};\n");
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+      expect(
+        JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
+          .dependencies["smol-toml"],
+      ).toBe("^1.7.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies drops smol-toml when process-runtime.ts is gone", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rmdep-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1", other: "1.0.0" },
+          devDependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      const result = removeConsumerRuntimeDependencies(dir);
+      expect(result.changed).toBe(true);
+      expect(result.removed).toContain("smol-toml");
+      const pkg = JSON.parse(
+        readFileSync(path.join(dir, "package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      expect(pkg.dependencies?.["smol-toml"]).toBeUndefined();
+      expect(pkg.dependencies?.other).toBe("1.0.0");
+      expect(pkg.devDependencies).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps a differently-ranged smol-toml pin", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-range-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^2.0.0" },
+        }),
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+      expect(
+        JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
+          .dependencies["smol-toml"],
+      ).toBe("^2.0.0");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps smol-toml when another source imports it", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-import-"));
+    try {
+      mkdirSync(path.join(dir, "src", "nested"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      // Non-source + empty dir so the walker covers skip / recurse-miss branches
+      // before the import hit (nested/notes.md must be visited before custom.ts).
+      mkdirSync(path.join(dir, "src", "empty"), { recursive: true });
+      // Lexicographically before custom.ts so the non-.ts skip branch is hit.
+      writeFileSync(path.join(dir, "src", "nested", "aaa.md"), "ignore me\n");
+      writeFileSync(
+        path.join(dir, "src", "nested", "custom.ts"),
+        `import { parse } from 'smol-toml';\nexport const x = parse;\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+      expect(
+        JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
+          .dependencies["smol-toml"],
+      ).toBe("^1.7.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps dep used via require()", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-require-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "src", "legacy.cjs"),
+        `const { parse } = require('smol-toml');\nmodule.exports = { parse };\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps dep used via dynamic import()", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-dyn-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "src", "lazy.js"),
+        `export async function load() { return import('smol-toml'); }\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps dep used via side-effect import", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-sidefx-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "src", "register.ts"),
+        `import 'smol-toml';\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies skips unreadable source files", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-unreadable-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1", other: "1.0.0" },
+        }),
+      );
+      const locked = path.join(dir, "src", "locked.ts");
+      writeFileSync(locked, `import { parse } from 'smol-toml';\n`);
+      const original = fs.readFileSync.bind(fs);
+      const spy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+        ...args: Parameters<typeof fs.readFileSync>
+      ) => {
+        if (args[0] === locked) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return Reflect.apply(original, fs, args);
+      }) as typeof fs.readFileSync);
+      try {
+        // Unreadable import must not block removal of a matching pin when no
+        // other readable source imports the package.
+        const result = removeConsumerRuntimeDependencies(dir);
+        expect(result.removed).toContain("smol-toml");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps pin when src dir is unreadable", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-unread-dir-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      const original = fs.readdirSync.bind(fs);
+      const spy = vi.spyOn(fs, "readdirSync").mockImplementation(((
+        ...args: Parameters<typeof fs.readdirSync>
+      ) => {
+        if (String(args[0]) === path.join(dir, "src")) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return Reflect.apply(original, fs, args);
+      }) as typeof fs.readdirSync);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = removeConsumerRuntimeDependencies(dir);
+        expect(result.removed).not.toContain("smol-toml");
+        expect(result.changed).toBe(false);
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringMatching(/could not read.*keeping dependency pin/),
+        );
+      } finally {
+        spy.mockRestore();
+        warn.mockRestore();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps pin on non-Error readdir failure", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-unread-str-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      const original = fs.readdirSync.bind(fs);
+      const spy = vi.spyOn(fs, "readdirSync").mockImplementation(((
+        ...args: Parameters<typeof fs.readdirSync>
+      ) => {
+        if (String(args[0]) === path.join(dir, "src")) {
+          throw "EACCES";
+        }
+        return Reflect.apply(original, fs, args);
+      }) as typeof fs.readdirSync);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect(removeConsumerRuntimeDependencies(dir).removed).not.toContain(
+          "smol-toml",
+        );
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("keeping dependency pin (EACCES)"),
+        );
+      } finally {
+        spy.mockRestore();
+        warn.mockRestore();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies scans multiple source files", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-multi-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "z-other.ts"),
+        "export const x = 1;\n",
+      );
+      writeFileSync(
+        path.join(dir, "src", "a-uses.ts"),
+        `import { parse } from 'smol-toml';\n`,
+      );
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      const result = removeConsumerRuntimeDependencies(dir);
+      expect(result.removed).not.toContain("smol-toml");
+      expect(result.changed).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies no-ops without candidates, package.json, or pins", () => {
+    const fake = mkdtempSync(path.join(tmpdir(), "ahp-rm-empty-"));
+    try {
+      writeFileSync(
+        path.join(fake, "package.json"),
+        JSON.stringify({ name: "nanoclaw-agenthost-process" }),
+      );
+      mkdirSync(path.join(fake, "packages/host"), { recursive: true });
+      writeFileSync(
+        path.join(fake, "packages/host/package.json"),
+        JSON.stringify({ name: "@nanoclaw-agenthost-process/host" }),
+      );
+      // host has no smol-toml pin → empty candidates
+      expect(removeConsumerRuntimeDependencies(fake, fake)).toEqual({
+        changed: false,
+        removed: [],
+      });
+
+      const noPkg = mkdtempSync(path.join(tmpdir(), "ahp-rm-nopkg-"));
+      try {
+        expect(removeConsumerRuntimeDependencies(noPkg)).toEqual({
+          changed: false,
+          removed: [],
+        });
+      } finally {
+        rmSync(noPkg, { recursive: true, force: true });
+      }
+
+      const onlyDev = mkdtempSync(path.join(tmpdir(), "ahp-rm-dev-"));
+      try {
+        writeFileSync(
+          path.join(onlyDev, "package.json"),
+          JSON.stringify({
+            name: "fork",
+            devDependencies: { "smol-toml": "^1.7.1" },
+          }),
+        );
+        const result = removeConsumerRuntimeDependencies(onlyDev);
+        expect(result.removed).toEqual(["smol-toml"]);
+        expect(
+          JSON.parse(readFileSync(path.join(onlyDev, "package.json"), "utf8"))
+            .devDependencies,
+        ).toBeUndefined();
+      } finally {
+        rmSync(onlyDev, { recursive: true, force: true });
+      }
+
+      const absent = mkdtempSync(path.join(tmpdir(), "ahp-rm-absent-"));
+      try {
+        writeFileSync(
+          path.join(absent, "package.json"),
+          JSON.stringify({ name: "fork", dependencies: { other: "1" } }),
+        );
+        expect(removeConsumerRuntimeDependencies(absent)).toEqual({
+          changed: false,
+          removed: [],
+        });
+      } finally {
+        rmSync(absent, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(fake, { recursive: true, force: true });
     }
   });
 });

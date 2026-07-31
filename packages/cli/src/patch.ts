@@ -79,7 +79,8 @@ export function insertProcessBootBlockContent(content: string): string {
 export function removeProcessBootBlockContent(content: string): string {
   const pattern =
     /\r?\n?[ \t]*\/\/ @nanoclaw-agenthost-process:boot:begin\r?\n[\s\S]*?[ \t]*\/\/ @nanoclaw-agenthost-process:boot:end\r?\n?/;
-  return content.replace(pattern, "\n");
+  // Collapse blank runs left where the boot block sat (install wraps with \n).
+  return content.replace(pattern, "\n").replace(/(?:\r?\n){3,}/g, "\n\n");
 }
 
 const LEGACY_PATH_CONSTS =

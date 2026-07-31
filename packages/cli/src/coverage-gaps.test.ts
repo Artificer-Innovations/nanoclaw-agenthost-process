@@ -772,7 +772,10 @@ describe("resourcesDir", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-multi-"));
     try {
       mkdirSync(path.join(dir, "src"), { recursive: true });
-      writeFileSync(path.join(dir, "src", "z-other.ts"), "export const x = 1;\n");
+      writeFileSync(
+        path.join(dir, "src", "z-other.ts"),
+        "export const x = 1;\n",
+      );
       writeFileSync(
         path.join(dir, "src", "a-uses.ts"),
         `import { parse } from 'smol-toml';\n`,

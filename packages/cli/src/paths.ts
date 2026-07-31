@@ -227,10 +227,12 @@ function consumerImportsDependency(
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
-      // Unreadable dirs: fail closed — treat as not imported so uninstall can proceed.
+      // Unreadable dirs: treat as not imported so uninstall can proceed
+      // (we cannot prove a consumer still needs the pin).
       return false;
     }
-    entries.sort((a, b) => a.name.localeCompare(b.name));
+    // Codepoint order — avoid localeCompare() locale variance across environments.
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {

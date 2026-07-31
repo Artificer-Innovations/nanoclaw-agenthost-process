@@ -674,13 +674,12 @@ describe("resourcesDir", () => {
       writeFileSync(locked, `import { parse } from 'smol-toml';\n`);
       const original = fs.readFileSync.bind(fs);
       const spy = vi.spyOn(fs, "readFileSync").mockImplementation(((
-        p: fs.PathOrFileDescriptor,
-        enc?: unknown,
+        ...args: Parameters<typeof fs.readFileSync>
       ) => {
-        if (p === locked) {
+        if (args[0] === locked) {
           throw Object.assign(new Error("EACCES"), { code: "EACCES" });
         }
-        return original(p, enc as BufferEncoding);
+        return Reflect.apply(original, fs, args);
       }) as typeof fs.readFileSync);
       try {
         // Unreadable import must not block removal of a matching pin when no
@@ -708,13 +707,12 @@ describe("resourcesDir", () => {
       );
       const original = fs.readdirSync.bind(fs);
       const spy = vi.spyOn(fs, "readdirSync").mockImplementation(((
-        p: fs.PathLike,
-        options?: unknown,
+        ...args: Parameters<typeof fs.readdirSync>
       ) => {
-        if (String(p) === path.join(dir, "src")) {
+        if (String(args[0]) === path.join(dir, "src")) {
           throw Object.assign(new Error("EACCES"), { code: "EACCES" });
         }
-        return original(p, options as Parameters<typeof fs.readdirSync>[1]);
+        return Reflect.apply(original, fs, args);
       }) as typeof fs.readdirSync);
       try {
         const result = removeConsumerRuntimeDependencies(dir);

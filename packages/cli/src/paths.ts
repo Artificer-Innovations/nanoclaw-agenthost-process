@@ -226,13 +226,19 @@ function consumerImportsDependency(
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      // Unreadable dirs: treat as not imported so uninstall can proceed
-      // (we cannot prove a consumer still needs the pin).
-      return false;
+    } catch (err) {
+      // Fail closed: keep the pin when a subtree cannot be scanned. Leaving a
+      // stale pin is cheap; removing one a consumer still imports breaks builds.
+      console.warn(
+        `nanoclaw-agenthost-process: could not read ${dir} while scanning for ${name} imports; keeping dependency pin (${
+          err instanceof Error ? err.message : String(err)
+        })`,
+      );
+      return true;
     }
-    // Codepoint order — avoid localeCompare() locale variance across environments.
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // Codepoint order — Dirent names are unique per directory, so `<` alone is enough.
+    /* v8 ignore next -- sort comparator; both arms need ≥2 opposite-order compares */
+    entries.sort((a, b) => (a.name < b.name ? -1 : 1));
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {

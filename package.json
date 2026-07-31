@@ -1,6 +1,6 @@
 {
   "name": "nanoclaw-agenthost-process",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local child-process RuntimeDriver for NanoClaw agenthosts — run agents without Docker",
   "type": "module",
   "license": "MIT",
@@ -58,7 +58,9 @@
   },
   "pnpm": {
     "peerDependencyRules": {
-      "ignoreMissing": ["nanoclaw-agenthosts"]
+      "ignoreMissing": [
+        "nanoclaw-agenthosts"
+      ]
     }
   },
   "publishConfig": {

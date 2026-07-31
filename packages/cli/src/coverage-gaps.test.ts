@@ -635,6 +635,30 @@ describe("resourcesDir", () => {
     }
   });
 
+  it("removeConsumerRuntimeDependencies keeps dep used via side-effect import", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-sidefx-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "src", "register.ts"),
+        `import 'smol-toml';\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("removeConsumerRuntimeDependencies skips unreadable source files", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-unreadable-"));
     try {
@@ -648,14 +672,55 @@ describe("resourcesDir", () => {
       );
       const locked = path.join(dir, "src", "locked.ts");
       writeFileSync(locked, `import { parse } from 'smol-toml';\n`);
-      fs.chmodSync(locked, 0o000);
+      const original = fs.readFileSync.bind(fs);
+      const spy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+        p: fs.PathOrFileDescriptor,
+        enc?: unknown,
+      ) => {
+        if (p === locked) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return original(p, enc as BufferEncoding);
+      }) as typeof fs.readFileSync);
       try {
         // Unreadable import must not block removal of a matching pin when no
         // other readable source imports the package.
         const result = removeConsumerRuntimeDependencies(dir);
         expect(result.removed).toContain("smol-toml");
       } finally {
-        fs.chmodSync(locked, 0o644);
+        spy.mockRestore();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies treats unreadable src dirs as not imported", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-unread-dir-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      const original = fs.readdirSync.bind(fs);
+      const spy = vi.spyOn(fs, "readdirSync").mockImplementation(((
+        p: fs.PathLike,
+        options?: unknown,
+      ) => {
+        if (String(p) === path.join(dir, "src")) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return original(p, options as Parameters<typeof fs.readdirSync>[1]);
+      }) as typeof fs.readdirSync);
+      try {
+        const result = removeConsumerRuntimeDependencies(dir);
+        expect(result.removed).toContain("smol-toml");
+      } finally {
+        spy.mockRestore();
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -203,3 +203,98 @@ export function ensureConsumerRuntimeDependencies(
   fs.writeFileSync(pkgPath, next);
   return { changed: true, added };
 }
+
+const CONSUMER_SOURCE_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
+
+/**
+ * True when some consumer source other than process-runtime.ts still imports
+ * `name` — uninstall must leave those pins alone.
+ */
+function consumerImportsDependency(
+  nanoclawRoot: string,
+  name: string,
+): boolean {
+  const srcRoot = path.join(nanoclawRoot, "src");
+  if (!fs.existsSync(srcRoot)) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Static ESM, CJS require(), and dynamic import() — any of these means the
+  // fork still uses the dep and uninstall must leave the pin alone.
+  const needle = new RegExp(
+    `(?:from\\s+['"]${escaped}['"]|require\\(\\s*['"]${escaped}['"]\\s*\\)|import\\(\\s*['"]${escaped}['"]\\s*\\))`,
+  );
+  const walk = (dir: string): boolean => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (walk(full)) return true;
+        continue;
+      }
+      // TS + JS under src/ (compiled or hand-written CJS).
+      if (!CONSUMER_SOURCE_EXTS.has(path.extname(entry.name))) continue;
+      let text: string;
+      try {
+        text = fs.readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
+      if (needle.test(text)) return true;
+    }
+    return false;
+  };
+  return walk(srcRoot);
+}
+
+/**
+ * Drop runtime deps that were only needed for copied host sources.
+ * Only removes when:
+ * - process-runtime.ts is gone (the importer we installed)
+ * - the pin's version range matches what this package would have added
+ * - no other consumer source still imports the package
+ */
+export function removeConsumerRuntimeDependencies(
+  nanoclawRoot: string,
+  startDir: string = __dirname,
+): { changed: boolean; removed: string[] } {
+  const required = consumerRuntimeDependencies(startDir);
+  const candidates = Object.entries(required);
+  if (!candidates.length) return { changed: false, removed: [] };
+
+  const processRuntime = path.join(nanoclawRoot, "src/process-runtime.ts");
+  if (fs.existsSync(processRuntime)) {
+    return { changed: false, removed: [] };
+  }
+
+  const pkgPath = path.join(nanoclawRoot, "package.json");
+  if (!fs.existsSync(pkgPath)) return { changed: false, removed: [] };
+
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    [key: string]: unknown;
+  };
+
+  const removed: string[] = [];
+  for (const [name, expectedRange] of candidates) {
+    if (consumerImportsDependency(nanoclawRoot, name)) continue;
+
+    if (pkg.dependencies?.[name] === expectedRange) {
+      delete pkg.dependencies[name];
+      removed.push(name);
+    }
+    if (pkg.devDependencies?.[name] === expectedRange) {
+      delete pkg.devDependencies[name];
+      if (!removed.includes(name)) removed.push(name);
+    }
+  }
+  if (!removed.length) return { changed: false, removed: [] };
+
+  if (pkg.dependencies && Object.keys(pkg.dependencies).length === 0) {
+    delete pkg.dependencies;
+  }
+  if (pkg.devDependencies && Object.keys(pkg.devDependencies).length === 0) {
+    delete pkg.devDependencies;
+  }
+
+  fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  return { changed: true, removed };
+}

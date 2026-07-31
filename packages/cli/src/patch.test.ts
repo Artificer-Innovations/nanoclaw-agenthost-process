@@ -22,6 +22,7 @@ describe("boot block", () => {
     expect(twice).toBe(once);
     const removed = removeProcessBootBlockContent(once);
     expect(hasProcessBootBlock(removed)).toBe(false);
+    expect(removed).not.toMatch(/\n{3,}/);
   });
 
   it("finds insert point before initChannelAdapters", () => {

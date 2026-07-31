@@ -204,13 +204,7 @@ export function ensureConsumerRuntimeDependencies(
   return { changed: true, added };
 }
 
-const CONSUMER_SOURCE_EXTS = new Set([
-  ".ts",
-  ".tsx",
-  ".js",
-  ".mjs",
-  ".cjs",
-]);
+const CONSUMER_SOURCE_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 
 /**
  * True when some consumer source other than process-runtime.ts still imports

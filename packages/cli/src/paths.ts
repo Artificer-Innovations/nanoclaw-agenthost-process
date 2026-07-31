@@ -204,6 +204,14 @@ export function ensureConsumerRuntimeDependencies(
   return { changed: true, added };
 }
 
+const CONSUMER_SOURCE_EXTS = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".mjs",
+  ".cjs",
+]);
+
 /**
  * True when some consumer source other than process-runtime.ts still imports
  * `name` — uninstall must leave those pins alone.
@@ -214,8 +222,11 @@ function consumerImportsDependency(
 ): boolean {
   const srcRoot = path.join(nanoclawRoot, "src");
   if (!fs.existsSync(srcRoot)) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Static ESM, CJS require(), and dynamic import() — any of these means the
+  // fork still uses the dep and uninstall must leave the pin alone.
   const needle = new RegExp(
-    `from\\s+['"]${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['"]`,
+    `(?:from\\s+['"]${escaped}['"]|require\\(\\s*['"]${escaped}['"]\\s*\\)|import\\(\\s*['"]${escaped}['"]\\s*\\))`,
   );
   const walk = (dir: string): boolean => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -224,8 +235,8 @@ function consumerImportsDependency(
         if (walk(full)) return true;
         continue;
       }
-      // Fork sources are TypeScript; skip everything else.
-      if (!entry.name.endsWith(".ts")) continue;
+      // TS + JS under src/ (compiled or hand-written CJS).
+      if (!CONSUMER_SOURCE_EXTS.has(path.extname(entry.name))) continue;
       let text: string;
       try {
         text = fs.readFileSync(full, "utf8");

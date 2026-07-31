@@ -587,6 +587,54 @@ describe("resourcesDir", () => {
     }
   });
 
+  it("removeConsumerRuntimeDependencies keeps dep used via require()", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-require-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "src", "legacy.cjs"),
+        `const { parse } = require('smol-toml');\nmodule.exports = { parse };\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies keeps dep used via dynamic import()", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-dyn-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1" },
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "src", "lazy.js"),
+        `export async function load() { return import('smol-toml'); }\n`,
+      );
+      expect(removeConsumerRuntimeDependencies(dir)).toEqual({
+        changed: false,
+        removed: [],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("removeConsumerRuntimeDependencies skips unreadable source files", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-unreadable-"));
     try {

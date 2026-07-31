@@ -217,7 +217,6 @@ function consumerImportsDependency(
   const needle = new RegExp(
     `from\\s+['"]${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}['"]`,
   );
-  const skip = new Set(["process-runtime.ts"]);
   const walk = (dir: string): boolean => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
@@ -225,13 +224,15 @@ function consumerImportsDependency(
         if (walk(full)) return true;
         continue;
       }
-      if (!/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
-      if (skip.has(entry.name) && path.dirname(full) === srcRoot) continue;
+      // Fork sources are TypeScript; skip everything else.
+      if (!entry.name.endsWith(".ts")) continue;
+      let text: string;
       try {
-        if (needle.test(fs.readFileSync(full, "utf8"))) return true;
+        text = fs.readFileSync(full, "utf8");
       } catch {
-        /* ignore unreadable */
+        continue;
       }
+      if (needle.test(text)) return true;
     }
     return false;
   };

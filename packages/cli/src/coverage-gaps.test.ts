@@ -557,7 +557,7 @@ describe("resourcesDir", () => {
   it("removeConsumerRuntimeDependencies keeps smol-toml when another source imports it", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-import-"));
     try {
-      mkdirSync(path.join(dir, "src"), { recursive: true });
+      mkdirSync(path.join(dir, "src", "nested"), { recursive: true });
       writeFileSync(
         path.join(dir, "package.json"),
         JSON.stringify({
@@ -565,8 +565,13 @@ describe("resourcesDir", () => {
           dependencies: { "smol-toml": "^1.7.1" },
         }),
       );
+      // Non-source + empty dir so the walker covers skip / recurse-miss branches
+      // before the import hit (nested/notes.md must be visited before custom.ts).
+      mkdirSync(path.join(dir, "src", "empty"), { recursive: true });
+      // Lexicographically before custom.ts so the non-.ts skip branch is hit.
+      writeFileSync(path.join(dir, "src", "nested", "aaa.md"), "ignore me\n");
       writeFileSync(
-        path.join(dir, "src", "custom.ts"),
+        path.join(dir, "src", "nested", "custom.ts"),
         `import { parse } from 'smol-toml';\nexport const x = parse;\n`,
       );
       expect(removeConsumerRuntimeDependencies(dir)).toEqual({
@@ -577,6 +582,33 @@ describe("resourcesDir", () => {
         JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"))
           .dependencies["smol-toml"],
       ).toBe("^1.7.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removeConsumerRuntimeDependencies skips unreadable source files", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ahp-rm-unreadable-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "fork",
+          dependencies: { "smol-toml": "^1.7.1", other: "1.0.0" },
+        }),
+      );
+      const locked = path.join(dir, "src", "locked.ts");
+      writeFileSync(locked, `import { parse } from 'smol-toml';\n`);
+      fs.chmodSync(locked, 0o000);
+      try {
+        // Unreadable import must not block removal of a matching pin when no
+        // other readable source imports the package.
+        const result = removeConsumerRuntimeDependencies(dir);
+        expect(result.removed).toContain("smol-toml");
+      } finally {
+        fs.chmodSync(locked, 0o644);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

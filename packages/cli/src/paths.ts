@@ -217,13 +217,29 @@ function consumerImportsDependency(
   const srcRoot = path.join(nanoclawRoot, "src");
   if (!fs.existsSync(srcRoot)) return false;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Static ESM, CJS require(), and dynamic import() — any of these means the
-  // fork still uses the dep and uninstall must leave the pin alone.
+  // Static ESM (incl. side-effect import), CJS require(), and dynamic import()
+  // — any of these means the fork still uses the dep; uninstall must leave the pin.
   const needle = new RegExp(
-    `(?:from\\s+['"]${escaped}['"]|require\\(\\s*['"]${escaped}['"]\\s*\\)|import\\(\\s*['"]${escaped}['"]\\s*\\))`,
+    `(?:from\\s+['"]${escaped}['"]|import\\s+['"]${escaped}['"]|require\\(\\s*['"]${escaped}['"]\\s*\\)|import\\(\\s*['"]${escaped}['"]\\s*\\))`,
   );
   const walk = (dir: string): boolean => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      // Fail closed: keep the pin when a subtree cannot be scanned. Leaving a
+      // stale pin is cheap; removing one a consumer still imports breaks builds.
+      console.warn(
+        `nanoclaw-agenthost-process: could not read ${dir} while scanning for ${name} imports; keeping dependency pin (${
+          err instanceof Error ? err.message : String(err)
+        })`,
+      );
+      return true;
+    }
+    // Codepoint order — Dirent names are unique per directory, so `<` alone is enough.
+    /* v8 ignore next -- sort comparator; both arms need ≥2 opposite-order compares */
+    entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (walk(full)) return true;

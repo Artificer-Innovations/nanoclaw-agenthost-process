@@ -93,7 +93,10 @@ describe("install lifecycle", () => {
     expect(index).toContain("startAgenthostProcess");
 
     const connection = readFileSync(
-      path.join(root, "container/agent-runner/src/mailbox/sqlite/connection.ts"),
+      path.join(
+        root,
+        "container/agent-runner/src/mailbox/sqlite/connection.ts",
+      ),
       "utf8",
     );
     expect(connection).toContain("WORKING_ROOT");
@@ -113,7 +116,10 @@ describe("install lifecycle", () => {
     expect(existsSync(path.join(root, "src/process-boot.ts"))).toBe(false);
     expect(
       readFileSync(
-        path.join(root, "container/agent-runner/src/mailbox/sqlite/connection.ts"),
+        path.join(
+          root,
+          "container/agent-runner/src/mailbox/sqlite/connection.ts",
+        ),
         "utf8",
       ),
     ).toContain("/workspace/inbound.db");

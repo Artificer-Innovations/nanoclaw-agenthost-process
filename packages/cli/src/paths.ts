@@ -237,8 +237,9 @@ function consumerImportsDependency(
       return true;
     }
     // Codepoint order — Dirent names are unique per directory, so `<` alone is enough.
-    /* v8 ignore next -- sort comparator; both arms need ≥2 opposite-order compares */
+    /* v8 ignore start -- sort comparator; both arms need ≥2 opposite-order compares */
     entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+    /* v8 ignore stop */
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {

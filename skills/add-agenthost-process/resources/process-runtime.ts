@@ -175,7 +175,7 @@ export function buildProcessAgentEnv(
     env.SESSIONIO_AGENT_GROUP_ID = session.agent_group_id;
     /* v8 ignore start */
     if (env.SESSIONIO_BASE_URL) {
-    /* v8 ignore stop */
+      /* v8 ignore stop */
       env.SESSIONIO_BASE_URL = rewriteSessionioBaseUrlForHost(
         env.SESSIONIO_BASE_URL,
       );
@@ -595,7 +595,7 @@ function clearWakeFailure(sessionId: string, sessionDirPath?: string): void {
   wakeFailures.delete(sessionId);
   /* v8 ignore start */
   if (sessionDirPath) {
-  /* v8 ignore stop */
+    /* v8 ignore stop */
     fs.rmSync(wakeBlockedPath(sessionDirPath), { force: true });
   }
 }

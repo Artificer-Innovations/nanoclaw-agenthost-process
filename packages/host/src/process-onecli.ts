@@ -92,7 +92,7 @@ export async function applyProcessEnv(
 
   /* v8 ignore start */
   if (opts.agentIdentifier) {
-  /* v8 ignore stop */
+    /* v8 ignore stop */
     await client.ensureAgent({
       name: opts.agentName ?? opts.agentIdentifier,
       identifier: opts.agentIdentifier,

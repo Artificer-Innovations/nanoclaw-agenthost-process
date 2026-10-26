@@ -72,6 +72,16 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
     );
   });
 
+  it("patches inbound/outbound-only connection paths without heartbeat", () => {
+    const mailboxEra = `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
+const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
+`;
+    const patched = patchWorkingRootPaths(mailboxEra);
+    expect(patched).toContain("WORKING_ROOT");
+    expect(patched).not.toContain("DEFAULT_HEARTBEAT_PATH");
+    expect(patchWorkingRootPaths(patched)).toBe(patched);
+  });
+
   it("patches and unpatches CWD + memory scaffold", () => {
     const source = `const CWD = '/workspace/agent';\nensureMemoryScaffold();\nensureMemoryScaffold();\n`;
     const patched = patchWorkingRootCwd(source);

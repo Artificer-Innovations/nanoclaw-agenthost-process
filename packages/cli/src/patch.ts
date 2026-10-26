@@ -29,7 +29,6 @@ const WORKING_ROOT_PATHS_BLOCK = `${PATHS_BEGIN}
 const WORKING_ROOT = process.env.WORKING_ROOT || '/workspace';
 const DEFAULT_INBOUND_PATH = \`\${WORKING_ROOT}/inbound.db\`;
 const DEFAULT_OUTBOUND_PATH = \`\${WORKING_ROOT}/outbound.db\`;
-const DEFAULT_HEARTBEAT_PATH = \`\${WORKING_ROOT}/.heartbeat\`;
 ${PATHS_END}`;
 
 const WORKING_ROOT_CONFIG_BLOCK = `${CONFIG_BEGIN}
@@ -83,11 +82,21 @@ export function removeProcessBootBlockContent(content: string): string {
   return content.replace(pattern, "\n").replace(/(?:\r?\n){3,}/g, "\n\n");
 }
 
-const LEGACY_PATH_CONSTS =
+/** Pre-v2026.10 connection.ts also declared DEFAULT_HEARTBEAT_PATH. */
+const LEGACY_PATH_CONSTS_WITH_HEARTBEAT =
   /const DEFAULT_INBOUND_PATH = '\/workspace\/inbound\.db';\r?\nconst DEFAULT_OUTBOUND_PATH = '\/workspace\/outbound\.db';\r?\nconst DEFAULT_HEARTBEAT_PATH = '\/workspace\/\.heartbeat';/;
+/** v2026.10+ mailbox/sqlite/connection.ts — inbound/outbound only. */
+const LEGACY_PATH_CONSTS =
+  /const DEFAULT_INBOUND_PATH = '\/workspace\/inbound\.db';\r?\nconst DEFAULT_OUTBOUND_PATH = '\/workspace\/outbound\.db';/;
 
 export function patchWorkingRootPaths(content: string): string {
   if (content.includes(PATHS_BEGIN)) return content;
+  if (LEGACY_PATH_CONSTS_WITH_HEARTBEAT.test(content)) {
+    return content.replace(
+      LEGACY_PATH_CONSTS_WITH_HEARTBEAT,
+      WORKING_ROOT_PATHS_BLOCK,
+    );
+  }
   if (!LEGACY_PATH_CONSTS.test(content)) {
     throw new Error(
       `${WORKING_ROOT_CONNECTION_PATH} missing expected /workspace DEFAULT_* path constants (anchors moved?)`,
@@ -103,7 +112,7 @@ export function unpatchWorkingRootPaths(content: string): string {
   );
   return content.replace(
     pattern,
-    `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';\nconst DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';\nconst DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';`,
+    `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';\nconst DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';`,
   );
 }
 

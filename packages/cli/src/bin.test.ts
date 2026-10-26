@@ -33,6 +33,9 @@ describe("bin", () => {
       },
     );
     expect(parseArgs(["node", "bin.js"]).command).toBe("help");
+    expect(
+      parseArgs(["node", "bin.js", "install", "--dry-run", "--path"]).path,
+    ).toBeUndefined();
   });
 
   it("runCommand help returns 0", () => {

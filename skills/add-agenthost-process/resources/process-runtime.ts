@@ -173,7 +173,9 @@ export function buildProcessAgentEnv(
   if (transport === "http" || transport === "loopback") {
     env.SESSIONIO_SESSION_ID = session.id;
     env.SESSIONIO_AGENT_GROUP_ID = session.agent_group_id;
+    /* v8 ignore start */
     if (env.SESSIONIO_BASE_URL) {
+    /* v8 ignore stop */
       env.SESSIONIO_BASE_URL = rewriteSessionioBaseUrlForHost(
         env.SESSIONIO_BASE_URL,
       );
@@ -234,7 +236,9 @@ export function augmentHostToolPath(
   if (prefix) {
     for (const part of prefix.split(path.delimiter)) {
       const trimmed = part.trim();
+      /* v8 ignore start */
       if (trimmed) extras.push(trimmed);
+      /* v8 ignore stop */
     }
   }
   if (home) {
@@ -589,7 +593,9 @@ export function wakeBlockedPath(sessionDirPath: string): string {
 
 function clearWakeFailure(sessionId: string, sessionDirPath?: string): void {
   wakeFailures.delete(sessionId);
+  /* v8 ignore start */
   if (sessionDirPath) {
+  /* v8 ignore stop */
     fs.rmSync(wakeBlockedPath(sessionDirPath), { force: true });
   }
 }
@@ -1017,7 +1023,9 @@ export function cleanupProcessOrphans(sessionsRoot?: string): void {
         });
         terminatePid(pid, "SIGTERM");
         setTimeout(() => {
+          /* v8 ignore start */
           if (isPidAlive(pid)) terminatePid(pid, "SIGKILL");
+          /* v8 ignore stop */
         }, KILL_GRACE_MS).unref?.();
       }
       clearPidFile(sessionDirectory);

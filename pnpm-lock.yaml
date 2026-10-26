@@ -1,7 +1,7 @@
 lockfileVersion: '9.0'
 
 settings:
-  autoInstallPeers: true
+  autoInstallPeers: false
   excludeLinksFromLockfile: false
 
 overrides:
@@ -18,10 +18,6 @@ overrides:
 importers:
 
   .:
-    dependencies:
-      nanoclaw-agenthosts:
-        specifier: ^0.1.0
-        version: 0.1.1
     devDependencies:
       '@changesets/changelog-github':
         specifier: ^0.5.1
@@ -46,7 +42,7 @@ importers:
         version: 7.3.7(@types/node@22.20.1)
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)(vite@7.3.7(@types/node@22.20.1))
+        version: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)
 
   packages/cli:
     devDependencies:
@@ -61,7 +57,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)(vite@7.3.7(@types/node@22.20.1))
+        version: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)
 
   packages/host:
     dependencies:
@@ -80,7 +76,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: 4.1.12
-        version: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)(vite@7.3.7(@types/node@22.20.1))
+        version: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)
 
 packages:
 
@@ -778,11 +774,6 @@ packages:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
     engines: {node: '>=4'}
 
-  nanoclaw-agenthosts@0.1.1:
-    resolution: {integrity: sha512-yv4nJPI9P1dnlIM3ga8Ic/TiEPQGLU1kcK92V1SrqI7LUTkURYJSdcunBt3VkTRknfSI+1VsMHa8uPKNw9mkGw==}
-    engines: {node: '>=20'}
-    hasBin: true
-
   nanoid@3.3.18:
     resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
@@ -1050,7 +1041,6 @@ packages:
       '@vitest/ui': 4.1.12
       happy-dom: '*'
       jsdom: '*'
-      vite: 7.3.7
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -1494,7 +1484,7 @@ snapshots:
       obug: 2.2.1
       std-env: 4.3.0
       tinyrainbow: 3.2.0
-      vitest: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)(vite@7.3.7(@types/node@22.20.1))
+      vitest: 4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)
 
   '@vitest/expect@4.1.12':
     dependencies:
@@ -1773,8 +1763,6 @@ snapshots:
 
   mri@1.2.0: {}
 
-  nanoclaw-agenthosts@0.1.1: {}
-
   nanoid@3.3.18: {}
 
   node-fetch@2.7.0:
@@ -1959,7 +1947,7 @@ snapshots:
       '@types/node': 22.20.1
       fsevents: 2.3.3
 
-  vitest@4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12)(vite@7.3.7(@types/node@22.20.1)):
+  vitest@4.1.12(@types/node@22.20.1)(@vitest/coverage-v8@4.1.12):
     dependencies:
       '@vitest/expect': 4.1.12
       '@vitest/mocker': 4.1.12(vite@7.3.7(@types/node@22.20.1))
@@ -1985,7 +1973,17 @@ snapshots:
       '@types/node': 22.20.1
       '@vitest/coverage-v8': 4.1.12(vitest@4.1.12)
     transitivePeerDependencies:
+      - jiti
+      - less
+      - lightningcss
       - msw
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - yaml
 
   webidl-conversions@3.0.1: {}
 

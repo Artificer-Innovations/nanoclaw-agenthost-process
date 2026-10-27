@@ -25,11 +25,18 @@ const CWD_END = `// ${PROCESS_MARKER}:working-root-cwd:end`;
 const CONFIG_BEGIN = `// ${PROCESS_MARKER}:working-root-config:begin`;
 const CONFIG_END = `// ${PROCESS_MARKER}:working-root-config:end`;
 
-const WORKING_ROOT_PATHS_BLOCK = `${PATHS_BEGIN}
+const PRE_PATCH_PATHS_MARKER = `${PROCESS_MARKER}:pre-patch-paths:`;
+const PRE_PATCH_PATHS_WITH_HEARTBEAT = "with-heartbeat";
+const PRE_PATCH_PATHS_MAILBOX = "mailbox-era";
+
+function workingRootPathsBlock(shape: string): string {
+  return `${PATHS_BEGIN}
+// ${PRE_PATCH_PATHS_MARKER} ${shape}
 const WORKING_ROOT = process.env.WORKING_ROOT || '/workspace';
 const DEFAULT_INBOUND_PATH = \`\${WORKING_ROOT}/inbound.db\`;
 const DEFAULT_OUTBOUND_PATH = \`\${WORKING_ROOT}/outbound.db\`;
 ${PATHS_END}`;
+}
 
 const WORKING_ROOT_CONFIG_BLOCK = `${CONFIG_BEGIN}
 const CONFIG_PATH = process.env.WORKING_ROOT
@@ -94,7 +101,7 @@ export function patchWorkingRootPaths(content: string): string {
   if (LEGACY_PATH_CONSTS_WITH_HEARTBEAT.test(content)) {
     return content.replace(
       LEGACY_PATH_CONSTS_WITH_HEARTBEAT,
-      WORKING_ROOT_PATHS_BLOCK,
+      workingRootPathsBlock(PRE_PATCH_PATHS_WITH_HEARTBEAT),
     );
   }
   if (!LEGACY_PATH_CONSTS.test(content)) {
@@ -102,18 +109,26 @@ export function patchWorkingRootPaths(content: string): string {
       `${WORKING_ROOT_CONNECTION_PATH} missing expected /workspace DEFAULT_* path constants (anchors moved?)`,
     );
   }
-  return content.replace(LEGACY_PATH_CONSTS, WORKING_ROOT_PATHS_BLOCK);
+  return content.replace(
+    LEGACY_PATH_CONSTS,
+    workingRootPathsBlock(PRE_PATCH_PATHS_MAILBOX),
+  );
 }
 
 export function unpatchWorkingRootPaths(content: string): string {
   if (!content.includes(PATHS_BEGIN)) return content;
+  const shape =
+    content.match(
+      new RegExp(`// ${escapeRegExp(PRE_PATCH_PATHS_MARKER)} (\\S+)`),
+    )?.[1] ?? PRE_PATCH_PATHS_MAILBOX;
+  const restored =
+    shape === PRE_PATCH_PATHS_WITH_HEARTBEAT
+      ? `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';\nconst DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';\nconst DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';`
+      : `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';\nconst DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';`;
   const pattern = new RegExp(
     `${escapeRegExp(PATHS_BEGIN)}[\\s\\S]*?${escapeRegExp(PATHS_END)}`,
   );
-  return content.replace(
-    pattern,
-    `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';\nconst DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';`,
-  );
+  return content.replace(pattern, restored);
 }
 
 const LEGACY_CWD = /const CWD = '\/workspace\/agent';/;

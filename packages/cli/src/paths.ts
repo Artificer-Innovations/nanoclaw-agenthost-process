@@ -95,7 +95,7 @@ export const PROCESS_MARKER = "@nanoclaw-agenthost-process";
 export const REQUIRED_HOST_FILES = HOST_COPY_RULES.map((r) => r.dest);
 
 export const WORKING_ROOT_CONNECTION_PATH =
-  "container/agent-runner/src/db/connection.ts";
+  "container/agent-runner/src/mailbox/sqlite/connection.ts";
 export const WORKING_ROOT_INDEX_PATH = "container/agent-runner/src/index.ts";
 export const WORKING_ROOT_CONFIG_PATH = "container/agent-runner/src/config.ts";
 

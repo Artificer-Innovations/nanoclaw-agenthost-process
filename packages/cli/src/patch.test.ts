@@ -60,9 +60,13 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
   it("patches and unpatches connection paths", () => {
     const patched = patchWorkingRootPaths(connection);
     expect(patched).toContain("WORKING_ROOT");
+    expect(patched).toContain("pre-patch-paths: with-heartbeat");
     expect(patchWorkingRootPaths(patched)).toBe(patched);
     const restored = unpatchWorkingRootPaths(patched);
     expect(restored).toContain("/workspace/inbound.db");
+    expect(restored).toContain(
+      "DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat'",
+    );
     expect(restored).not.toContain("working-root-paths:begin");
   });
 
@@ -70,6 +74,22 @@ const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
     expect(() => patchWorkingRootPaths("const x = 1;\n")).toThrow(
       /anchors moved/,
     );
+  });
+
+  it("patches inbound/outbound-only connection paths without heartbeat", () => {
+    const mailboxEra = `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
+const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
+`;
+    const patched = patchWorkingRootPaths(mailboxEra);
+    expect(patched).toContain("WORKING_ROOT");
+    expect(patched).toContain("pre-patch-paths: mailbox-era");
+    expect(patched).not.toContain("DEFAULT_HEARTBEAT_PATH");
+    expect(patchWorkingRootPaths(patched)).toBe(patched);
+    const restored = unpatchWorkingRootPaths(patched);
+    expect(restored).toContain(
+      "DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db'",
+    );
+    expect(restored).not.toContain("DEFAULT_HEARTBEAT_PATH");
   });
 
   it("patches and unpatches CWD + memory scaffold", () => {

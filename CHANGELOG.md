@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+### Patch Changes
+
+- Path/anchor updates for NanoClaw 2026.10.1-rc.2 host layout.
+
 ## 0.1.1
 
 ### Patch Changes

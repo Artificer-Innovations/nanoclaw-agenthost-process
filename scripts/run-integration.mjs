@@ -46,9 +46,8 @@ export function wakeContainer(session) { return resolveRuntimeDriver(session).wa
 }
 `,
   "src/channels/index.ts": "export {};\n",
-  "container/agent-runner/src/db/connection.ts": `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
+  "container/agent-runner/src/mailbox/sqlite/connection.ts": `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
 const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
-const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
 `,
   "container/agent-runner/src/index.ts": `const CWD = '/workspace/agent';
 ensureMemoryScaffold();

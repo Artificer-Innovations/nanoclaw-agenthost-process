@@ -69,7 +69,7 @@ describe("bin commands against fixture", () => {
     writeFixture(root, "src/channels/index.ts", "export {};\n");
     writeFixture(
       root,
-      "container/agent-runner/src/db/connection.ts",
+      "container/agent-runner/src/mailbox/sqlite/connection.ts",
       `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
 const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
 const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
@@ -241,7 +241,7 @@ describe("install error paths", () => {
     writeFixture(root, "src/channels/index.ts", "export {};\n");
     writeFixture(
       root,
-      "container/agent-runner/src/db/connection.ts",
+      "container/agent-runner/src/mailbox/sqlite/connection.ts",
       `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
 const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
 const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';

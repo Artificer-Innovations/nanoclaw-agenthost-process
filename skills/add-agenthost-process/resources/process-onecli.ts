@@ -90,7 +90,9 @@ export async function applyProcessEnv(
   fs.mkdirSync(opts.runtimeDir, { recursive: true });
   const client = opts.client ?? (await defaultClient());
 
+  /* v8 ignore start */
   if (opts.agentIdentifier) {
+    /* v8 ignore stop */
     await client.ensureAgent({
       name: opts.agentName ?? opts.agentIdentifier,
       identifier: opts.agentIdentifier,

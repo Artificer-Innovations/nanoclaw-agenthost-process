@@ -69,7 +69,7 @@ describe("bin commands against fixture", () => {
     writeFixture(root, "src/channels/index.ts", "export {};\n");
     writeFixture(
       root,
-      "container/agent-runner/src/db/connection.ts",
+      "container/agent-runner/src/mailbox/sqlite/connection.ts",
       `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
 const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
 const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
@@ -205,6 +205,19 @@ describe("install error paths", () => {
     expect(() => runInstall(root)).toThrow(/Missing required host file/);
   });
 
+  it("verify annotates missing agenthosts capabilities", () => {
+    root = mkdtempSync(path.join(tmpdir(), "ahp-verify-ah-"));
+    const result = runVerify(root);
+    expect(result.ok).toBe(false);
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.includes("missing agenthosts file") &&
+          issue.includes("Install nanoclaw-agenthosts"),
+      ),
+    ).toBe(true);
+  });
+
   it("verify flags missing transform files", () => {
     root = mkdtempSync(path.join(tmpdir(), "ahp-verify-"));
     agenthostsOk(root);
@@ -228,7 +241,7 @@ describe("install error paths", () => {
     writeFixture(root, "src/channels/index.ts", "export {};\n");
     writeFixture(
       root,
-      "container/agent-runner/src/db/connection.ts",
+      "container/agent-runner/src/mailbox/sqlite/connection.ts",
       `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
 const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
 const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';

@@ -95,7 +95,7 @@ export const PROCESS_MARKER = "@nanoclaw-agenthost-process";
 export const REQUIRED_HOST_FILES = HOST_COPY_RULES.map((r) => r.dest);
 
 export const WORKING_ROOT_CONNECTION_PATH =
-  "container/agent-runner/src/db/connection.ts";
+  "container/agent-runner/src/mailbox/sqlite/connection.ts";
 export const WORKING_ROOT_INDEX_PATH = "container/agent-runner/src/index.ts";
 export const WORKING_ROOT_CONFIG_PATH = "container/agent-runner/src/config.ts";
 
@@ -237,8 +237,9 @@ function consumerImportsDependency(
       return true;
     }
     // Codepoint order — Dirent names are unique per directory, so `<` alone is enough.
-    /* v8 ignore next -- sort comparator; both arms need ≥2 opposite-order compares */
+    /* v8 ignore start -- sort comparator; both arms need ≥2 opposite-order compares */
     entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+    /* v8 ignore stop */
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {

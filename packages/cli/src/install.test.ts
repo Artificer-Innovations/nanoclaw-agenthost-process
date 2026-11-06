@@ -31,7 +31,7 @@ function seedNanoclaw(root: string): void {
   writeFixture(root, "src/channels/index.ts", "export {};\n");
   writeFixture(
     root,
-    "container/agent-runner/src/db/connection.ts",
+    "container/agent-runner/src/mailbox/sqlite/connection.ts",
     `const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
 const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
 const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
@@ -93,7 +93,10 @@ describe("install lifecycle", () => {
     expect(index).toContain("startAgenthostProcess");
 
     const connection = readFileSync(
-      path.join(root, "container/agent-runner/src/db/connection.ts"),
+      path.join(
+        root,
+        "container/agent-runner/src/mailbox/sqlite/connection.ts",
+      ),
       "utf8",
     );
     expect(connection).toContain("WORKING_ROOT");
@@ -113,7 +116,10 @@ describe("install lifecycle", () => {
     expect(existsSync(path.join(root, "src/process-boot.ts"))).toBe(false);
     expect(
       readFileSync(
-        path.join(root, "container/agent-runner/src/db/connection.ts"),
+        path.join(
+          root,
+          "container/agent-runner/src/mailbox/sqlite/connection.ts",
+        ),
         "utf8",
       ),
     ).toContain("/workspace/inbound.db");

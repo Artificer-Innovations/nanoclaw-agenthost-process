@@ -92,6 +92,21 @@ const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
     expect(restored).not.toContain("DEFAULT_HEARTBEAT_PATH");
   });
 
+  it("unpatch defaults to mailbox-era when pre-patch shape marker is missing", () => {
+    const legacyMarked = `// @nanoclaw-agenthost-process:working-root-paths:begin
+const WORKING_ROOT = process.env.WORKING_ROOT || '/workspace';
+const DEFAULT_INBOUND_PATH = \`\${WORKING_ROOT}/inbound.db\`;
+const DEFAULT_OUTBOUND_PATH = \`\${WORKING_ROOT}/outbound.db\`;
+// @nanoclaw-agenthost-process:working-root-paths:end
+`;
+    const restored = unpatchWorkingRootPaths(legacyMarked);
+    expect(restored).toContain(
+      "DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db'",
+    );
+    expect(restored).not.toContain("DEFAULT_HEARTBEAT_PATH");
+    expect(restored).not.toContain("working-root-paths:begin");
+  });
+
   it("patches and unpatches CWD + memory scaffold", () => {
     const source = `const CWD = '/workspace/agent';\nensureMemoryScaffold();\nensureMemoryScaffold();\n`;
     const patched = patchWorkingRootCwd(source);
